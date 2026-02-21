@@ -189,7 +189,7 @@ Each workflow folder contains:
 Have a project in mind? Want to adapt one of these workflows to your specific stack?
 
 **📅 Book a free discovery call:**  
-→ [cal.com/agence-ooo/call-decouverte](https://cal.com/agence-ooo/call-decouverte)
+→ HERE : ((https://calendar.app.google/C8GsVN91gfBwH63N7))
 
 ---
 
