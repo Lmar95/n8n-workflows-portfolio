@@ -16,7 +16,7 @@ Every workflow here has been:
 Whether you're evaluating my capabilities or looking for inspiration to automate your own business, you're in the right place.
 
 📅 **Want to discuss a custom automation project?**  
-→ [Book a discovery call](https://cal.com/agence-ooo/call-decouverte)
+→ [Book a discovery call](https://calendar.app.google/C8GsVN91gfBwH63N7)
 
 ---
 
