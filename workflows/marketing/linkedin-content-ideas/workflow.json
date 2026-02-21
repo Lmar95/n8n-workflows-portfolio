@@ -1,0 +1,13 @@
+{
+  "name": "LinkedIn Content Ideas Generator",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["marketing","content","linkedin","ideas"],
+  "meta": {
+    "description": "Analyze top-performing posts in your niche daily (by hashtags and key influencers). Identify winning topics, formats (carousels, case studies, hot takes), and underexplored angles. Generate 20–30 post ideas per week with hooks, structure, and CTAs tailored to your positioning.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "LinkedIn Signal-Based Prospecting",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["marketing","prospecting","linkedin","outbound"],
+  "meta": {
+    "description": "Monitor LinkedIn for buying signals: job changes, company milestones, posts indicating business problems. Auto-enrich profiles with email and phone, score relevance, send personalized connection + follow-up sequences triggered by the detected signal.",
+    "difficulty": "⭐⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

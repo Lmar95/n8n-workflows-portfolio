@@ -1,0 +1,13 @@
+{
+  "name": "Client Onboarding Automation",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["operations","onboarding","clients","saas"],
+  "meta": {
+    "description": "New client signed = automated 30–60 day onboarding journey. Personalized welcome emails, progressive video tutorials, activation tasks (integrations, team training, quick wins), automatic check-ins, detection of stuck clients, and escalation to CSM when needed.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

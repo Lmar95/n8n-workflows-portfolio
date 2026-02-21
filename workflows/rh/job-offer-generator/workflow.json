@@ -1,0 +1,13 @@
+{
+  "name": "Job Offer Generator",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","recruiting","jobs","automation"],
+  "meta": {
+    "description": "Give the job title and a few bullet points on the ideal profile. Get a complete, SEO-optimized job posting: engaging company description, detailed missions, required profile, technical skills, soft skills, benefits, and recruitment process. 2–3 variants adapted to your employer brand tone.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

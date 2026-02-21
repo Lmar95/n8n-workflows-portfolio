@@ -1,0 +1,13 @@
+{
+  "name": "Sales Proposal Generator",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["sales","proposals","automation","crm"],
+  "meta": {
+    "description": "One click from CRM to a fully personalized proposal. The agent pulls prospect data and conversation history, then generates a complete commercial proposal: executive summary, problem understanding, recommended solution, methodology, deliverables, timeline, pricing, ROI estimate, relevant case studies, and next steps.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Contract Renewal Alerts",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["admin","renewals","contracts","retention"],
+  "meta": {
+    "description": "Watch contract expiry dates (licenses, services, subscriptions). At D-60, D-30, D-15 send personalized notifications to client + commercial + Customer Success. Auto-generate renewal contract draft with updated terms for rapid signature.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

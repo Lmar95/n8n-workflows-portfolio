@@ -1,0 +1,13 @@
+{
+  "name": "Sales Collateral Creator",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["sales","collateral","content","enablement"],
+  "meta": {
+    "description": "Auto-generate all sales materials: product one-pagers, competitor battle cards, vertical-specific pitch decks, formatted case studies, brochures, FAQ sheets, and discovery call scripts. All branded, always up-to-date, stored in a centralized library.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

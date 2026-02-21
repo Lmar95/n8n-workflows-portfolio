@@ -1,0 +1,13 @@
+{
+  "name": "Performance Review Prep",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","performance","reviews","automation"],
+  "meta": {
+    "description": "For each upcoming annual review, automatically compile all relevant data: annual objectives and achievement rate, KPIs reached, 360° feedback received, completed projects, training followed, notable incidents and successes. Pre-fill manager dossier with suggested discussion points + employee self-assessment form.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

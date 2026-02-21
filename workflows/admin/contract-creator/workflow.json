@@ -1,0 +1,13 @@
+{
+  "name": "Contract Creator (Admin)",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["admin","contracts","legal","automation"],
+  "meta": {
+    "description": "Anyone needing a contract fills a simple form (type, parties, clauses, duration). The agent selects the right legal template, pre-fills all variables, generates PDF, sends for dual e-signature, notifies on completion, and archives with searchable metadata.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

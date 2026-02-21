@@ -1,0 +1,13 @@
+{
+  "name": "Access & Permission Management",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["operations","hr","access","security"],
+  "meta": {
+    "description": "New hire or access request → standardized form → manager approval workflow → auto-create accounts across all tools (Google Workspace, Slack, Notion, CRM, etc.) → assign correct permissions by role → send credentials → archive for security audit.",
+    "difficulty": "⭐⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

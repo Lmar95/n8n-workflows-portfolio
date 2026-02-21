@@ -1,0 +1,13 @@
+{
+  "name": "Project Time & Profitability Tracker",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["admin","finance","time-tracking","profitability"],
+  "meta": {
+    "description": "Connect time tracking and project management tools. Calculate real project cost (hours × daily rate per contributor), compare against budget and sale price. Real-time profitability dashboards with alerts when a project exceeds 10% budget overrun.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

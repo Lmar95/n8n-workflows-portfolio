@@ -1,0 +1,13 @@
+{
+  "name": "Fundraising & Acquisition Prospecting",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["marketing","prospecting","fundraising","outbound"],
+  "meta": {
+    "description": "Monitor Crunchbase, Dealroom, and press releases for fresh fundraising rounds and acquisitions in real time. Reach out within 48–72h (the optimal window when companies are building their stack with new budget).",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

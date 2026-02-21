@@ -1,0 +1,13 @@
+{
+  "name": "CV Screening & Scoring",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","recruiting","cv","screening","ai"],
+  "meta": {
+    "description": "Received applications are automatically parsed, structured, and scored (0–100) against the job requirements. Must-haves vs nice-to-haves weighting. Red flags detected (CV gaps, excessive job hopping). Candidates sorted into three buckets: excellent fit, potential, off-target.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

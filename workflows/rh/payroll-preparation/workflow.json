@@ -1,0 +1,13 @@
+{
+  "name": "Payroll Preparation",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","payroll","finance","automation"],
+  "meta": {
+    "description": "Automatically collect all payroll inputs: timesheets, PTO, sick leave, overtime, validated expense reports, bonuses, and variable pay elements. Calculate payslips according to collective agreement and individual contracts. Generate files for payroll software and deliver digital payslips.",
+    "difficulty": "⭐⭐⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

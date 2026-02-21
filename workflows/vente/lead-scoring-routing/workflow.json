@@ -1,0 +1,13 @@
+{
+  "name": "Lead Scoring & Routing",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["sales","scoring","routing","leads"],
+  "meta": {
+    "description": "Score every inbound lead against a custom model combining firmographics (size, sector, budget), behavioral signals (pages visited, content downloaded, email engagement), and intent signals (technology stack, searches). Auto-route to the right rep by territory, expertise, and workload.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

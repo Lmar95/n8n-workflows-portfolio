@@ -1,0 +1,13 @@
+{
+  "name": "Rejection Email Automation",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","recruiting","candidates","email"],
+  "meta": {
+    "description": "When a candidate is rejected in the ATS, auto-generate a personalized, empathetic rejection email mentioning the role, thanking them, providing constructive feedback (if they were close), and encouraging future applications. Human review option for finalist-stage rejections.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

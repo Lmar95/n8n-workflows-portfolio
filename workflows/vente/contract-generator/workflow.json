@@ -1,0 +1,13 @@
+{
+  "name": "Contract Generator (Sales)",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["sales","contracts","legal","automation"],
+  "meta": {
+    "description": "When a deal is marked 'won' in the CRM, automatically generate the contract from a pre-approved legal template. Pulls all deal data, fills variables, sends for e-signature, notifies all parties, and archives the signed version.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

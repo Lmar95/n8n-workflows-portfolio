@@ -1,0 +1,13 @@
+{
+  "name": "Invoice Generator",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["admin","invoicing","finance","automation"],
+  "meta": {
+    "description": "Triggered by a validated order, delivered service, or recurring subscription cycle. Auto-generates a compliant invoice (auto-numbering, legal mentions, correct VAT), emails it with a payment link, and syncs with accounting.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

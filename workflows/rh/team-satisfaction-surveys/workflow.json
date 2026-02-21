@@ -1,0 +1,13 @@
+{
+  "name": "Team Satisfaction Surveys",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","surveys","satisfaction","culture"],
+  "meta": {
+    "description": "Automated regular pulse surveys (weekly/monthly) sent via Slack/email. Anonymous responses on morale, workload, team relationships, management feedback, and improvement suggestions. AI compiles results, detects warning signals (burnout, overload, conflicts), and generates manager reports.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

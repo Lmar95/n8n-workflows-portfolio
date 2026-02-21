@@ -1,0 +1,13 @@
+{
+  "name": "Support Ticket Routing",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["operations","support","ticketing","ai"],
+  "meta": {
+    "description": "AI-powered ticket classifier and router. Analyzes ticket content to detect category (technical, billing, commercial, bug), urgency level, and complexity. Routes to the right team/person, enriches with client context from CRM, and suggests responses for simple cases.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

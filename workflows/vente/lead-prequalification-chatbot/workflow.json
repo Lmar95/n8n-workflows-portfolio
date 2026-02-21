@@ -1,0 +1,13 @@
+{
+  "name": "Lead Pre-Qualification Chatbot",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["sales","chatbot","qualification","conversion"],
+  "meta": {
+    "description": "Conversational AI chatbot that qualifies website visitors 24/7. Asks 5–8 contextual questions in natural language, adapts based on responses. Qualified leads book directly in the rep's calendar; unqualified leads get relevant resources and enter nurturing.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Churn Prevention & Sentiment Analysis",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["operations","churn","retention","ai"],
+  "meta": {
+    "description": "Continuously analyze all client touchpoints: emails, support tickets, NPS responses, product usage, login frequency, onboarding progress. Detect frustration or disengagement signals, calculate health score, and alert CSM when a client enters the red zone — with recommended actions.",
+    "difficulty": "⭐⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

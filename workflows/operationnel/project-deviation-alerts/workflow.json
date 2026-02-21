@@ -1,0 +1,13 @@
+{
+  "name": "Project Deviation Alerts",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["operations","projects","monitoring","alerts"],
+  "meta": {
+    "description": "Monitor all active projects against planned schedule and budget. Detect tasks falling behind, sprints drifting, and budget overruns early. Send targeted alerts to project managers with context and suggested corrective actions.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

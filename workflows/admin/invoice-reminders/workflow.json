@@ -1,0 +1,13 @@
+{
+  "name": "Invoice Reminder Automation",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["admin","invoicing","finance","automation"],
+  "meta": {
+    "description": "Monitor your invoicing tool, detect unpaid invoices at D+7, D+15, D+30, and auto-send personalized follow-up emails. Tone escalates from friendly to firm. Finance team is alerted for cases over D+45. Full tracking in CRM.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

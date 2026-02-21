@@ -1,0 +1,13 @@
+{
+  "name": "Landing Page Copywriter",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["marketing","copywriting","conversion","landing-page"],
+  "meta": {
+    "description": "Provide your offer, ICP, benefits, and competitors. The agent analyzes top-performing landing pages in your sector, then generates 3 complete page variants using AIDA, PAS, and Before-After-Bridge frameworks — including headlines, subheads, benefit sections, testimonial structures, CTAs, FAQs, and objection handling.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

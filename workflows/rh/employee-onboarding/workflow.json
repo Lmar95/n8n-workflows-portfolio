@@ -1,0 +1,13 @@
+{
+  "name": "Employee Onboarding",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["hr","onboarding","employees","automation"],
+  "meta": {
+    "description": "New hire signs contract = automated 30–90 day onboarding journey: account provisioning, equipment ordering, training schedule, team introductions, required readings, first projects, regular manager check-ins. Progress tracked, blockers detected, D+30 and D+90 feedback collected.",
+    "difficulty": "⭐⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}

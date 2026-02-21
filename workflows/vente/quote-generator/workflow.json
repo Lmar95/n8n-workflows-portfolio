@@ -1,0 +1,13 @@
+{
+  "name": "Quote Generator",
+  "nodes": [],
+  "connections": {},
+  "active": false,
+  "settings": {},
+  "tags": ["sales","quotes","admin","automation"],
+  "meta": {
+    "description": "Commercial fills a simple form (products/services, quantities, discounts, options). Workflow auto-calculates totals, applies pricing rules (volume discounts, seasonality), adds T&Cs, generates branded numbered PDF, sends by email, creates e-sign version, and notifies CRM + accounting.",
+    "difficulty": "⭐⭐",
+    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
+  }
+}
