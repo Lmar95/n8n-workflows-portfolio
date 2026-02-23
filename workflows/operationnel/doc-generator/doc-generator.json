@@ -1,0 +1,138 @@
+{
+  "name": "Génération automatique de documentation produit et process",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generer-documentation",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0001",
+      "name": "Webhook - Demande de documentation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst doc_type = body.doc_type || 'process';\nconst content_source = body.content || body.description || body.specs;\nconst target_audience = body.audience || 'équipe interne';\nconst output_formats = body.formats || ['notion', 'email'];\n\nreturn [{\n  json: {\n    request_id: `DOC-${Date.now()}`,\n    doc_type,\n    content_source: content_source?.substring(0, 8000),\n    title: body.title || `Documentation - ${new Date().toLocaleDateString('fr-FR')}`,\n    target_audience,\n    output_formats,\n    language: body.language || 'fr',\n    requested_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "d4e5f6a7-0002",
+      "name": "Initialisation de la demande",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en rédaction technique et documentation. Tu génères des documentations claires, structurées, complètes et adaptées à l'audience. Tu produis des guides utilisateurs, SOPs, tutoriels, FAQs et documentation technique de haute qualité."
+            },
+            {
+              "role": "user",
+              "content": "=Génère une documentation complète de type : {{ $json.doc_type }}\n\nTitre : {{ $json.title }}\nAudience cible : {{ $json.target_audience }}\n\nContenu source / Informations :\n{{ $json.content_source }}\n\nGénère le tout en JSON :\n{\n  \"main_doc\": {\n    \"title\": \"Titre de la doc\",\n    \"introduction\": \"Introduction contextualisée (2-3 paragraphes)\",\n    \"sections\": [\n      {\n        \"section_title\": \"...\",\n        \"content\": \"Contenu détaillé de la section\",\n        \"subsections\": [{\"title\": \"...\", \"content\": \"...\"}]\n      }\n    ],\n    \"conclusion\": \"Résumé et prochaines étapes\"\n  },\n  \"quick_reference\": \"Guide de référence rapide (bullet points clés)\",\n  \"faq\": [\n    {\"question\": \"...\", \"answer\": \"...\"}\n  ],\n  \"sop_steps\": [\n    {\"step\": 1, \"action\": \"...\", \"expected_result\": \"...\", \"tips\": \"...\"}\n  ],\n  \"glossary\": [{\"term\": \"...\", \"definition\": \"...\"}],\n  \"meta\": {\n    \"version\": \"1.0\",\n    \"created_at\": \"{{ $json.requested_at }}\",\n    \"audience\": \"{{ $json.target_audience }}\",\n    \"estimated_reading_time\": \"X minutes\"\n  }\n}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.4, "maxTokens": 4000 }
+      },
+      "id": "d4e5f6a7-0003",
+      "name": "GPT-4 - Génération documentation complète",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Initialisation de la demande').first().json;\nlet doc;\ntry {\n  const raw = $input.first().json.message.content;\n  doc = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  throw new Error('Erreur parsing doc: ' + e.message);\n}\n\n// Construction HTML de la doc\nconst sectionsHTML = doc.main_doc?.sections?.map(s => {\n  const subsHtml = s.subsections?.map(sub => `<h3>${sub.title}</h3><p>${sub.content}</p>`).join('') || '';\n  return `<h2>${s.section_title}</h2><p>${s.content}</p>${subsHtml}`;\n}).join('') || '';\n\nconst faqHTML = doc.faq?.map(f => `<details><summary><strong>${f.question}</strong></summary><p>${f.answer}</p></details>`).join('') || '';\n\nconst sopHTML = doc.sop_steps?.map(s => \n  `<div style=\"border-left:3px solid #007bff;padding:10px;margin:10px 0\">\n  <strong>Étape ${s.step} : ${s.action}</strong>\n  <p>✅ Résultat attendu : ${s.expected_result}</p>\n  ${s.tips ? `<p>💡 Conseil : ${s.tips}</p>` : ''}\n  </div>`\n).join('') || '';\n\nconst full_html = `\n<html><head><meta charset=\"UTF-8\"><title>${doc.main_doc?.title}</title>\n<style>body{font-family:Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px}h1{color:#1a1a2e}h2{color:#16213e;border-bottom:2px solid #e0e0e0}details{margin:10px 0;padding:10px;background:#f9f9f9;border-radius:5px}</style></head>\n<body>\n<h1>${doc.main_doc?.title}</h1>\n<p><em>Version ${doc.meta?.version} | Audience : ${doc.meta?.audience} | Temps de lecture : ${doc.meta?.estimated_reading_time}</em></p>\n<hr/>\n<h2>Introduction</h2><p>${doc.main_doc?.introduction}</p>\n${sectionsHTML}\n${doc.quick_reference ? `<h2>📌 Référence Rapide</h2><p>${doc.quick_reference}</p>` : ''}\n${faqHTML ? `<h2>❓ FAQ</h2>${faqHTML}` : ''}\n${sopHTML ? `<h2>📋 Procédure Étape par Étape</h2>${sopHTML}` : ''}\n<hr/><p>${doc.main_doc?.conclusion}</p>\n</body></html>`;\n\nreturn [{\n  json: {\n    request_id: request.request_id,\n    title: doc.main_doc?.title,\n    doc,\n    full_html,\n    main_content: doc.main_doc?.sections?.map(s => `## ${s.section_title}\\n${s.content}`).join('\\n\\n'),\n    faq_text: doc.faq?.map(f => `Q: ${f.question}\\nR: ${f.answer}`).join('\\n\\n'),\n    generated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "d4e5f6a7-0004",
+      "name": "Formattage documentation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "resource": "page",
+        "operation": "create",
+        "databaseId": "={{ $vars.NOTION_DOCS_DB_ID }}",
+        "title": "={{ $json.title }}",
+        "blockUi": {
+          "blockValues": [
+            { "type": "heading_2", "textContent": "Introduction" },
+            { "type": "paragraph", "textContent": "={{ $json.doc.main_doc?.introduction }}" },
+            { "type": "heading_2", "textContent": "📌 Référence Rapide" },
+            { "type": "paragraph", "textContent": "={{ $json.doc.quick_reference }}" },
+            { "type": "heading_2", "textContent": "📋 Contenu Principal" },
+            { "type": "paragraph", "textContent": "={{ $json.main_content }}" },
+            { "type": "heading_2", "textContent": "❓ FAQ" },
+            { "type": "paragraph", "textContent": "={{ $json.faq_text }}" }
+          ]
+        }
+      },
+      "id": "d4e5f6a7-0005",
+      "name": "Notion - Publication documentation",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1040, 200],
+      "credentials": { "notionApi": { "id": "1", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=📚 *Nouvelle documentation générée !*\n\n*Titre :* {{ $json.title }}\n*ID :* {{ $json.request_id }}\n*Sections :* {{ $json.doc.main_doc?.sections?.length || 0 }}\n*FAQ :* {{ $json.doc.faq?.length || 0 }} questions\n*Temps de lecture :* {{ $json.doc.meta?.estimated_reading_time }}\n\n✅ Documentation publiée dans Notion"
+            }
+          ]
+        }
+      },
+      "id": "d4e5f6a7-0006",
+      "name": "Slack - Notification doc prête",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1040, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, request_id: $json.request_id, title: $json.title, sections_count: $json.doc.main_doc?.sections?.length, faq_count: $json.doc.faq?.length, notion_published: true }) }}"
+      },
+      "id": "d4e5f6a7-0007",
+      "name": "Réponse webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "content": "## 📚 Génération de Documentation Automatisée\n\n**Objectif :** À partir de specs, descriptions ou notes, génère une documentation complète avec introduction, sections, FAQ, SOP et glossaire.\n\n**Déclencheur :** POST /webhook/generer-documentation\n\n**Payload :**\n```json\n{\n  \"doc_type\": \"process|guide|sop|faq|technical\",\n  \"title\": \"Guide d'utilisation CRM\",\n  \"description\": \"Texte de description / specs...\",\n  \"audience\": \"équipe commerciale\"\n}\n```\n\n**Outputs :**\n- Document Notion structuré\n- HTML complet téléchargeable\n- FAQ + SOP étape par étape\n- Glossaire automatique\n\n**Variables requises :**\n- OPENAI_API_KEY\n- NOTION_DOCS_DB_ID\n- NOTION_API_KEY\n- SLACK_WEBHOOK_URL",
+        "height": 340,
+        "width": 400
+      },
+      "id": "d4e5f6a7-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Webhook - Demande de documentation": { "main": [[{ "node": "Initialisation de la demande", "type": "main", "index": 0 }]] },
+    "Initialisation de la demande": { "main": [[{ "node": "GPT-4 - Génération documentation complète", "type": "main", "index": 0 }]] },
+    "GPT-4 - Génération documentation complète": { "main": [[{ "node": "Formattage documentation", "type": "main", "index": 0 }]] },
+    "Formattage documentation": { "main": [[{ "node": "Notion - Publication documentation", "type": "main", "index": 0 }, { "node": "Slack - Notification doc prête", "type": "main", "index": 0 }, { "node": "Réponse webhook", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "documentation" }, { "name": "ia" }]
+}
