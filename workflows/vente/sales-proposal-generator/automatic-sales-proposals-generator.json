@@ -1,0 +1,214 @@
+{
+  "name": "Création Automatique des Propositions de Vente",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📄 Création Automatique des Propositions de Vente\n\n**Objectif :** Depuis le CRM, récupérer les infos prospect et générer une proposition commerciale personnalisée en PDF (executive summary, enjeux, solution, méthodologie, livrables, ROI, études de cas, tarifs).\n\n**Déclenchement :** Webhook POST `{\"dealId\": \"123456\"}` ou Bouton HubSpot\n\n**Configuration :**\n- `$vars.HUBSPOT_API_KEY`\n- `$vars.OPENAI_API_KEY`\n- `$vars.GOOGLE_DOCS_TEMPLATE_ID` (template de proposition)\n- `$vars.GOOGLE_DRIVE_FOLDER_ID`\n- `$vars.SALES_EMAIL`",
+        "height": 280,
+        "width": 480
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-proposal",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "🌐 Webhook - Générer Proposition",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "get",
+        "dealId": "={{ $json.body.dealId || $json.dealId }}"
+      },
+      "id": "get-deal",
+      "name": "🔵 Récupérer Deal HubSpot",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [800, 260]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 5,
+        "additionalFields": {
+          "filterGroups": [
+            {
+              "filters": [
+                {
+                  "propertyName": "associatedcompanyid",
+                  "operator": "EQ",
+                  "value": "={{ $('🔵 Récupérer Deal HubSpot').item.json.properties.associatedcompanyid }}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "id": "get-contacts",
+      "name": "👤 Récupérer Contacts Associés",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [800, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile all deal and contact information\nconst deal = $('🔵 Récupérer Deal HubSpot').item.json;\nconst contacts = $('👤 Récupérer Contacts Associés').all().map(i => i.json);\n\nconst mainContact = contacts[0] || {};\nconst props = deal.properties || {};\n\nconst dealInfo = {\n  dealName: props.dealname || 'Proposition Commerciale',\n  dealAmount: props.amount || '0',\n  dealStage: props.dealstage || '',\n  closeDate: props.closedate || '',\n  dealDescription: props.description || '',\n  pipeline: props.pipeline || '',\n  \n  // Contact info\n  contactFirstName: mainContact.properties?.firstname || 'Prénom',\n  contactLastName: mainContact.properties?.lastname || 'Nom',\n  contactEmail: mainContact.properties?.email || '',\n  contactTitle: mainContact.properties?.jobtitle || '',\n  contactPhone: mainContact.properties?.phone || '',\n  \n  // Company info\n  companyName: mainContact.properties?.company || props.company || 'L\\'entreprise',\n  companyIndustry: mainContact.properties?.industry || '',\n  companySize: mainContact.properties?.numemployees || '',\n  \n  // Custom fields from notes/deal description\n  problemStatement: props.description || '',\n  budget: props.amount || 'À définir',\n  timeline: props.closedate ? new Date(props.closedate).toLocaleDateString('fr-FR') : 'À définir',\n  \n  generatedAt: new Date().toISOString(),\n  proposalNumber: `PROP-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`\n};\n\nreturn [{ json: dealInfo }];"
+      },
+      "id": "compile-info",
+      "name": "⚙️ Compiler Informations Deal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert commercial et consultant senior avec 15+ ans d'expérience. Tu rédiges des propositions commerciales qui convertissent. Style: professionnel, orienté ROI, persuasif mais factuel. Tu écris en français."
+            },
+            {
+              "role": "user",
+              "content": "=Génère une proposition commerciale complète pour:\n\n**Prospect:**\n- Entreprise: {{ $json.companyName }}\n- Contact: {{ $json.contactFirstName }} {{ $json.contactLastName }}, {{ $json.contactTitle }}\n- Secteur: {{ $json.companyIndustry }}\n- Taille: {{ $json.companySize }} employés\n\n**Deal:**\n- Objet: {{ $json.dealName }}\n- Budget estimé: {{ $json.budget }}\n- Timeline: {{ $json.timeline }}\n- Contexte/Besoin: {{ $json.problemStatement }}\n\n**Numéro de proposition:** {{ $json.proposalNumber }}\n\nCrée une proposition JSON avec:\n{\n  \"executiveSummary\": \"Résumé exécutif 2-3 paragraphes percutants\",\n  \"situationAnalysis\": \"Analyse des enjeux actuels du prospect (3-4 paragraphes)\",\n  \"ourSolution\": \"Solution recommandée détaillée (4-5 paragraphes)\",\n  \"methodology\": \"Méthodologie et approche étape par étape\",\n  \"deliverables\": [\"livrable1\", \"livrable2\", \"livrable3\"],\n  \"timeline\": [{\"phase\": \"Phase 1\", \"duration\": \"2 semaines\", \"activities\": [\"...\"]}],\n  \"investissement\": {\"description\": \"...\", \"value\": \"{{ $json.budget }}\", \"paymentTerms\": \"30 jours\"},\n  \"roiEstimate\": \"ROI estimé et bénéfices chiffrés\",\n  \"caseStudy\": \"Étude de cas similaire pertinente\",\n  \"nextSteps\": [\"étape1\", \"étape2\", \"étape3\"],\n  \"validityDate\": \"Valable 30 jours\"\n}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 3000,
+          "response_format": { "type": "json_object" }
+        }
+      },
+      "id": "generate-proposal",
+      "name": "🤖 Générer Proposition (GPT-4)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1280, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and structure the proposal\nconst aiResponse = $input.first().json;\nconst content = aiResponse.message?.content || aiResponse.choices?.[0]?.message?.content || '{}';\nconst dealInfo = $('⚙️ Compiler Informations Deal').item.json;\n\nlet proposalContent;\ntry {\n  proposalContent = JSON.parse(content);\n} catch(e) {\n  proposalContent = { executiveSummary: content };\n}\n\n// Build full HTML document for PDF generation\nconst htmlContent = `\n<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n  body { font-family: 'Arial', sans-serif; margin: 40px; color: #333; line-height: 1.6; }\n  .header { background: linear-gradient(135deg, #1a1a2e, #16213e); color: white; padding: 40px; border-radius: 10px; margin-bottom: 30px; }\n  .header h1 { margin: 0; font-size: 28px; }\n  .header p { margin: 5px 0; opacity: 0.8; }\n  .badge { background: #e74c3c; padding: 5px 15px; border-radius: 20px; font-size: 12px; display: inline-block; margin-top: 10px; }\n  h2 { color: #1a1a2e; border-left: 4px solid #e74c3c; padding-left: 15px; margin-top: 40px; }\n  .highlight-box { background: #f8f9fa; border-left: 4px solid #3498db; padding: 20px; margin: 20px 0; border-radius: 5px; }\n  .deliverable-list li { margin: 8px 0; padding: 10px; background: #f8f9fa; border-radius: 5px; }\n  .timeline-item { display: flex; margin: 15px 0; }\n  .timeline-phase { background: #1a1a2e; color: white; padding: 10px 20px; border-radius: 5px; min-width: 120px; text-align: center; }\n  .investment-box { background: linear-gradient(135deg, #1a1a2e, #16213e); color: white; padding: 30px; border-radius: 10px; text-align: center; margin: 20px 0; }\n  .investment-box h3 { font-size: 24px; margin: 0; }\n  .next-steps li { margin: 10px 0; padding: 15px; background: #e8f5e9; border-radius: 5px; border-left: 4px solid #27ae60; }\n  .footer { text-align: center; margin-top: 50px; color: #666; font-size: 12px; border-top: 1px solid #eee; padding-top: 20px; }\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h1>Proposition Commerciale</h1>\n  <p>Préparée pour: <strong>${dealInfo.companyName}</strong></p>\n  <p>Attention: ${dealInfo.contactFirstName} ${dealInfo.contactLastName}, ${dealInfo.contactTitle}</p>\n  <p>Référence: ${dealInfo.proposalNumber}</p>\n  <div class=\"badge\">CONFIDENTIEL</div>\n</div>\n\n<h2>1. Résumé Exécutif</h2>\n<p>${proposalContent.executiveSummary || ''}</p>\n\n<h2>2. Analyse de votre Situation</h2>\n<div class=\"highlight-box\">${proposalContent.situationAnalysis || ''}</div>\n\n<h2>3. Notre Solution</h2>\n<p>${proposalContent.ourSolution || ''}</p>\n\n<h2>4. Méthodologie</h2>\n<p>${proposalContent.methodology || ''}</p>\n\n<h2>5. Livrables</h2>\n<ul class=\"deliverable-list\">\n  ${(proposalContent.deliverables || []).map(d => `<li>✅ ${d}</li>`).join('')}\n</ul>\n\n<h2>6. Planning</h2>\n${(proposalContent.timeline || []).map(t => `\n<div class=\"timeline-item\">\n  <div class=\"timeline-phase\">${t.phase}<br/><small>${t.duration}</small></div>\n  <ul style=\"margin-left:20px\">${(t.activities || []).map(a => `<li>${a}</li>`).join('')}</ul>\n</div>\n`).join('')}\n\n<h2>7. Investissement</h2>\n<div class=\"investment-box\">\n  <h3>${dealInfo.budget}</h3>\n  <p>${proposalContent.investissement?.description || ''}</p>\n  <p>Conditions: ${proposalContent.investissement?.paymentTerms || '30 jours fin de mois'}</p>\n</div>\n\n<h2>8. ROI Estimé</h2>\n<div class=\"highlight-box\">${proposalContent.roiEstimate || ''}</div>\n\n<h2>9. Cas Client Similaire</h2>\n<p>${proposalContent.caseStudy || ''}</p>\n\n<h2>10. Prochaines Étapes</h2>\n<ul class=\"next-steps\">\n  ${(proposalContent.nextSteps || []).map((s, i) => `<li><strong>Étape ${i+1}:</strong> ${s}</li>`).join('')}\n</ul>\n\n<div class=\"footer\">\n  <p>Cette proposition est ${proposalContent.validityDate || 'valable 30 jours'}</p>\n  <p>Généré le ${new Date().toLocaleDateString('fr-FR')} | ${dealInfo.proposalNumber}</p>\n</div>\n</body>\n</html>`;\n\nreturn [{\n  json: {\n    ...dealInfo,\n    proposalContent,\n    htmlContent,\n    proposalTitle: `Proposition ${dealInfo.proposalNumber} - ${dealInfo.companyName}`\n  }\n}];"
+      },
+      "id": "build-html",
+      "name": "📄 Construire Document HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pdfmonkey.io/api/v1/documents",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.PDFMONKEY_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"document\": {\n    \"document_template_id\": \"{{ $vars.PDFMONKEY_TEMPLATE_ID }}\",\n    \"status\": \"pending\",\n    \"payload\": {\n      \"html\": {{ JSON.stringify($json.htmlContent) }},\n      \"proposalNumber\": \"{{ $json.proposalNumber }}\",\n      \"company\": \"{{ $json.companyName }}\"\n    },\n    \"meta\": \"proposal-{{ $json.proposalNumber }}\"\n  }\n}"
+      },
+      "id": "generate-pdf",
+      "name": "📑 Générer PDF (PDFMonkey)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $vars.SALES_EMAIL }}",
+        "toEmail": "={{ $json.contactEmail }}",
+        "subject": "=Votre Proposition Commerciale - {{ $json.companyName }} | {{ $json.proposalNumber }}",
+        "emailType": "html",
+        "html": "=<html><body style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;'><h2>Bonjour {{ $json.contactFirstName }},</h2><p>Suite à nos échanges, j'ai le plaisir de vous faire parvenir notre proposition commerciale personnalisée pour {{ $json.companyName }}.</p><div style='background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;'><h3>Résumé Exécutif</h3><p>{{ $json.proposalContent.executiveSummary }}</p></div><p>Vous trouverez en pièce jointe notre proposition complète (réf. {{ $json.proposalNumber }}) qui détaille :</p><ul><li>Notre analyse de votre situation</li><li>La solution recommandée</li><li>La méthodologie et le planning</li><li>L'investissement et le ROI estimé</li></ul><p>Je reste disponible pour en discuter et répondre à vos questions. Seriez-vous disponible pour un échange cette semaine ?</p><p>Cordialement,</p><p><strong>L'équipe Commerciale</strong></p></body></html>"
+      },
+      "id": "send-email",
+      "name": "📧 Envoyer Proposition par Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1760, 460]
+    },
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "update",
+        "dealId": "={{ $('⚙️ Compiler Informations Deal').item.json.dealId }}",
+        "updateFields": {
+          "dealstage": "presentationscheduled",
+          "hs_deal_stage_probability": "0.3"
+        }
+      },
+      "id": "update-deal-stage",
+      "name": "🔵 Mettre à Jour Statut Deal",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [2000, 340]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"proposalNumber\": \"{{ $('⚙️ Compiler Informations Deal').item.json.proposalNumber }}\",\n  \"companyName\": \"{{ $('⚙️ Compiler Informations Deal').item.json.companyName }}\",\n  \"contactEmail\": \"{{ $('⚙️ Compiler Informations Deal').item.json.contactEmail }}\",\n  \"emailSent\": true,\n  \"generatedAt\": \"{{ new Date().toISOString() }}\"\n}"
+      },
+      "id": "respond",
+      "name": "✅ Confirmer Génération",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2240, 340]
+    }
+  ],
+  "connections": {
+    "🌐 Webhook - Générer Proposition": {
+      "main": [
+        [
+          { "node": "🔵 Récupérer Deal HubSpot", "type": "main", "index": 0 },
+          { "node": "👤 Récupérer Contacts Associés", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🔵 Récupérer Deal HubSpot": {
+      "main": [[{ "node": "⚙️ Compiler Informations Deal", "type": "main", "index": 0 }]]
+    },
+    "👤 Récupérer Contacts Associés": {
+      "main": [[{ "node": "⚙️ Compiler Informations Deal", "type": "main", "index": 1 }]]
+    },
+    "⚙️ Compiler Informations Deal": {
+      "main": [[{ "node": "🤖 Générer Proposition (GPT-4)", "type": "main", "index": 0 }]]
+    },
+    "🤖 Générer Proposition (GPT-4)": {
+      "main": [[{ "node": "📄 Construire Document HTML", "type": "main", "index": 0 }]]
+    },
+    "📄 Construire Document HTML": {
+      "main": [
+        [
+          { "node": "📑 Générer PDF (PDFMonkey)", "type": "main", "index": 0 },
+          { "node": "📧 Envoyer Proposition par Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📑 Générer PDF (PDFMonkey)": {
+      "main": [[{ "node": "🔵 Mettre à Jour Statut Deal", "type": "main", "index": 0 }]]
+    },
+    "📧 Envoyer Proposition par Email": {
+      "main": [[{ "node": "✅ Confirmer Génération", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "proposal" }, { "name": "crm" }]
+}
