@@ -1,0 +1,128 @@
+{
+  "name": "Création Automatique Supports Commerciaux Personnalisés",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Supports Commerciaux Automatisés\n\n**Objectif:** Générer des supports de vente personnalisés (one-pagers, pitch decks, case studies) adaptés à chaque prospect.\n\n**Déclencheur:** Webhook POST avec données prospect + type de support\n\n**Variables requises:**\n- OPENAI_API_KEY\n- HUBSPOT_API_KEY\n- NOTION_API_KEY\n- SENDGRID_API_KEY",
+        "height": 220,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create-sales-material",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Demande Support",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "sales-material-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es consultant commercial senior. Tu crées des supports de vente percutants et personnalisés qui accélèrent les cycles de vente.\"},{\"role\":\"user\",\"content\":\"Crée un \" + $json.type_support + \" personnalisé pour:\\n\\nProspect: \" + $json.nom_prospect + \"\\nEntreprise: \" + $json.entreprise + \"\\nSecteur: \" + ($json.secteur || '') + \"\\nProblème principal: \" + ($json.probleme || '') + \"\\nObjectif business: \" + ($json.objectif || '') + \"\\nBudget estimé: \" + ($json.budget || 'Non spécifié') + \"\\n\\nNotre offre: \" + ($json.notre_offre || process.env.DEFAULT_OFFER || 'Solution SaaS B2B') + \"\\nNos références secteur: \" + ($json.references || '') + \"\\n\\nType de support: \" + $json.type_support + \"\\n\\nPour un 'one-pager': titre accrocheur, problème/solution, 3 bénéfices clés, ROI estimé, CTA\\nPour un 'pitch-deck': 8 slides (contexte, problème, solution, produit, cas clients, ROI, équipe, prochaine étape)\\nPour un 'case-study': situation initiale, défis, solution mise en place, résultats mesurables, témoignage\\n\\nRetourne en JSON avec 'contenu' (le support complet) et 'objet_email' (pour l'envoi).\"}]"
+            },
+            { "name": "max_tokens", "value": "2000" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "generate-material",
+      "name": "GPT-4 Génère Support",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst request = $node['Webhook Demande Support'].first().json;\n\nlet material;\ntry {\n  material = JSON.parse(response.choices[0].message.content);\n} catch (e) {\n  material = { contenu: response.choices[0].message.content, objet_email: 'Support commercial' };\n}\n\n// Générer HTML du support\nconst htmlContent = `<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n  body { font-family: 'Helvetica Neue', sans-serif; max-width: 800px; margin: 0 auto; color: #1a1a2e; }\n  .header { background: linear-gradient(135deg, #16213e, #0f3460); color: white; padding: 40px; border-radius: 12px; margin-bottom: 24px; }\n  .header h1 { font-size: 2em; margin-bottom: 8px; }\n  .section { background: white; border: 1px solid #e8e8e8; border-radius: 8px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }\n  .highlight { background: #e8f4fd; border-left: 4px solid #0f3460; padding: 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }\n  .metric { display: inline-block; background: #0f3460; color: white; padding: 8px 16px; border-radius: 20px; margin: 4px; font-weight: bold; }\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h1>Support Personnalisé pour ${request.entreprise}</h1>\n  <p>Préparé spécialement pour ${request.nom_prospect} | ${new Date().toLocaleDateString('fr-FR')}</p>\n</div>\n<div class=\"section\">\n  <pre style=\"white-space: pre-wrap; font-family: inherit;\">${material.contenu}</pre>\n</div>\n</body>\n</html>`;\n\nreturn [{\n  json: {\n    ...request,\n    material,\n    htmlContent,\n    objetEmail: material.objet_email,\n    dateCreation: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "build-support",
+      "name": "Construire Support HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.email_commercial }}\", \"name\": \"Commercial\"}]}], \"from\": {\"email\": \"{{$vars.SALES_EMAIL}}\", \"name\": \"Système Commercial\"}, \"subject\": \"Support prêt: {{ $json.type_support }} pour {{ $json.entreprise }}\", \"content\": [{\"type\": \"text/html\", \"value\": \"{{ $json.htmlContent }}\"}]}"
+      },
+      "id": "send-to-commercial",
+      "name": "Envoyer au Commercial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.NOTION_API_KEY}}" },
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"parent\": {\"database_id\": \"{{$vars.NOTION_DB_SUPPORTS_ID}}\"}, \"properties\": {\"Titre\": {\"title\": [{\"text\": {\"content\": \"{{ $json.type_support }} - {{ $json.entreprise }}\"}}]}, \"Type\": {\"select\": {\"name\": \"{{ $json.type_support }}\"}}, \"Prospect\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $json.entreprise }}\"}}]}, \"Date\": {\"date\": {\"start\": \"{{ $json.dateCreation }}\"}}}, \"children\": [{\"object\": \"block\", \"type\": \"paragraph\", \"paragraph\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $json.material.contenu.slice(0, 1800) }}\"}}]}}]}"
+      },
+      "id": "save-notion",
+      "name": "Archiver Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 460]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"type\": \"{{ $json.type_support }}\", \"prospect\": \"{{ $json.entreprise }}\", \"message\": \"Support créé et envoyé\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1400, 380]
+    }
+  ],
+  "connections": {
+    "Webhook Demande Support": { "main": [[{ "node": "GPT-4 Génère Support", "type": "main", "index": 0 }]] },
+    "GPT-4 Génère Support": { "main": [[{ "node": "Construire Support HTML", "type": "main", "index": 0 }]] },
+    "Construire Support HTML": {
+      "main": [[
+        { "node": "Envoyer au Commercial", "type": "main", "index": 0 },
+        { "node": "Archiver Notion", "type": "main", "index": 0 }
+      ]]
+    },
+    "Envoyer au Commercial": { "main": [[{ "node": "Réponse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "supports" }, { "name": "commercial" }]
+}
