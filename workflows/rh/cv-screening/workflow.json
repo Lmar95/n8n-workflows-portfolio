@@ -1,13 +1,201 @@
 {
-  "name": "CV Screening & Scoring",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["hr","recruiting","cv","screening","ai"],
-  "meta": {
-    "description": "Received applications are automatically parsed, structured, and scored (0–100) against the job requirements. Must-haves vs nice-to-haves weighting. Red flags detected (CV gaps, excessive job hopping). Candidates sorted into three buckets: excellent fit, potential, off-target.",
-    "difficulty": "⭐⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Tri Automatique CVs et Scoring IA",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🎯 Tri Automatique CVs et Scoring IA\n\n**Objectif:** Réceptionner les CVs par email ou webhook, les analyser avec GPT-4, les scorer de 0-100 et les catégoriser automatiquement.\n\n**Déclencheurs:**\n- Email Gmail reçu avec CV en pièce jointe\n- Webhook POST (ATS, formulaire)\n\n**Variables requises:**\n- OPENAI_API_KEY\n- GMAIL_CREDENTIALS\n- NOTION_API_KEY\n- SLACK_WEBHOOK_URL_RH\n- GOOGLE_SHEETS_ID_CANDIDATS",
+        "height": 280,
+        "width": 400
+      },
+      "id": "sticky-note-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cv-reception",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook CV",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 200],
+      "webhookId": "cv-reception-webhook"
+    },
+    {
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "filters": {
+          "readStatus": "unread",
+          "sender": "",
+          "subject": "CV"
+        },
+        "options": {}
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail - Réception CVs",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [440, 380],
+      "credentials": { "gmailOAuth2": { "id": "gmail-cred", "name": "Gmail OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliser les données entrantes (webhook ou Gmail)\nconst item = $input.first();\nconst source = $node['Webhook CV'] ? 'webhook' : 'gmail';\n\nlet candidatData = {};\n\nif (source === 'webhook') {\n  candidatData = {\n    nom: item.json.nom || item.json.name || '',\n    prenom: item.json.prenom || item.json.first_name || '',\n    email: item.json.email || '',\n    telephone: item.json.telephone || item.json.phone || '',\n    poste: item.json.poste || item.json.position || '',\n    cvText: item.json.cv_text || item.json.resume_text || '',\n    cvUrl: item.json.cv_url || '',\n    source: 'webhook',\n    dateReception: new Date().toISOString()\n  };\n} else {\n  // Gmail\n  candidatData = {\n    nom: item.json.from?.split(' ')[0] || '',\n    prenom: item.json.from?.split(' ')[1] || '',\n    email: item.json.from?.match(/<(.+)>/)?.[1] || item.json.from || '',\n    telephone: '',\n    poste: item.json.subject?.replace(/CV/gi, '').trim() || '',\n    cvText: item.json.text || item.json.snippet || '',\n    cvUrl: '',\n    source: 'gmail',\n    messageId: item.json.id,\n    dateReception: new Date().toISOString()\n  };\n}\n\nreturn [{ json: candidatData }];"
+      },
+      "id": "normalize-data",
+      "name": "Normaliser Données",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 280]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "gpt-4-turbo-preview"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es un expert RH spécialisé en recrutement. Analyse ce CV et fournis une évaluation structurée en JSON.\"},{\"role\":\"user\",\"content\":\"Analyse ce CV pour le poste de \" + $json.poste + \":\\n\\n\" + $json.cvText + \"\\n\\nFournis une réponse JSON avec:\\n- score: nombre 0-100\\n- categorie: 'excellent' (80+), 'potentiel' (50-79), 'no_fit' (<50)\\n- points_forts: array de 3-5 points\\n- points_faibles: array de 2-3 points\\n- red_flags: array (si applicable)\\n- recommandation: texte bref\\n- experience_annees: nombre estimé\\n- competences_cles: array de compétences principales\"}]"
+            },
+            { "name": "max_tokens", "value": "1000" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "openai-analyze-cv",
+      "name": "GPT-4 Analyse CV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst originalData = $node['Normaliser Données'].first().json;\n\nlet analysis;\ntry {\n  const content = item.json.choices[0].message.content;\n  analysis = JSON.parse(content);\n} catch (e) {\n  analysis = {\n    score: 50,\n    categorie: 'potentiel',\n    points_forts: ['Analyse indisponible'],\n    points_faibles: [],\n    red_flags: [],\n    recommandation: 'Révision manuelle requise',\n    experience_annees: 0,\n    competences_cles: []\n  };\n}\n\nconst result = {\n  ...originalData,\n  score: analysis.score,\n  categorie: analysis.categorie,\n  points_forts: analysis.points_forts?.join(' | ') || '',\n  points_faibles: analysis.points_faibles?.join(' | ') || '',\n  red_flags: analysis.red_flags?.join(' | ') || '',\n  recommandation: analysis.recommandation,\n  experience_annees: analysis.experience_annees,\n  competences_cles: analysis.competences_cles?.join(', ') || '',\n  statut: analysis.categorie === 'excellent' ? 'À contacter' : \n           analysis.categorie === 'potentiel' ? 'À évaluer' : 'Refusé',\n  dateAnalyse: new Date().toISOString()\n};\n\nreturn [{ json: result }];"
+      },
+      "id": "parse-analysis",
+      "name": "Parser Analyse IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "cond-excellent",
+              "leftValue": "={{ $json.categorie }}",
+              "rightValue": "excellent",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-excellent",
+      "name": "Candidat Excellent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1400, 280]
+    },
+    {
+      "parameters": {
+        "url": "{{$vars.SLACK_WEBHOOK_URL_RH}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🌟 *Excellent candidat détecté!*\n\n*Candidat:* {{ $json.prenom }} {{ $json.nom }}\n*Email:* {{ $json.email }}\n*Poste:* {{ $json.poste }}\n*Score IA:* {{ $json.score }}/100\n*Expérience:* {{ $json.experience_annees }} ans\n\n*Points forts:* {{ $json.points_forts }}\n*Compétences:* {{ $json.competences_cles }}\n\n*Recommandation:* {{ $json.recommandation }}\n\n✅ Ce candidat a été ajouté à votre liste prioritaire."
+            }
+          ]
+        }
+      },
+      "id": "slack-alert-excellent",
+      "name": "Slack Alerte Excellent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 160]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_CANDIDATS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Candidats", "__rl": true, "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nom": "={{ $json.nom }}",
+            "Prénom": "={{ $json.prenom }}",
+            "Email": "={{ $json.email }}",
+            "Téléphone": "={{ $json.telephone }}",
+            "Poste Visé": "={{ $json.poste }}",
+            "Score IA": "={{ $json.score }}",
+            "Catégorie": "={{ $json.categorie }}",
+            "Statut": "={{ $json.statut }}",
+            "Expérience (ans)": "={{ $json.experience_annees }}",
+            "Compétences Clés": "={{ $json.competences_cles }}",
+            "Points Forts": "={{ $json.points_forts }}",
+            "Points Faibles": "={{ $json.points_faibles }}",
+            "Red Flags": "={{ $json.red_flags }}",
+            "Recommandation": "={{ $json.recommandation }}",
+            "Source": "={{ $json.source }}",
+            "Date Réception": "={{ $json.dateReception }}",
+            "Date Analyse": "={{ $json.dateAnalyse }}"
+          }
+        }
+      },
+      "id": "google-sheets-log",
+      "name": "Google Sheets Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1640, 380],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"candidat\": \"{{ $json.prenom }} {{ $json.nom }}\", \"score\": {{ $json.score }}, \"categorie\": \"{{ $json.categorie }}\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1880, 280]
+    }
+  ],
+  "connections": {
+    "Webhook CV": { "main": [[{ "node": "Normaliser Données", "type": "main", "index": 0 }]] },
+    "Gmail - Réception CVs": { "main": [[{ "node": "Normaliser Données", "type": "main", "index": 0 }]] },
+    "Normaliser Données": { "main": [[{ "node": "GPT-4 Analyse CV", "type": "main", "index": 0 }]] },
+    "GPT-4 Analyse CV": { "main": [[{ "node": "Parser Analyse IA", "type": "main", "index": 0 }]] },
+    "Parser Analyse IA": { "main": [[{ "node": "Candidat Excellent?", "type": "main", "index": 0 }]] },
+    "Candidat Excellent?": {
+      "main": [
+        [{ "node": "Slack Alerte Excellent", "type": "main", "index": 0 }],
+        [{ "node": "Google Sheets Log", "type": "main", "index": 0 }]
+      ]
+    },
+    "Slack Alerte Excellent": { "main": [[{ "node": "Google Sheets Log", "type": "main", "index": 0 }]] },
+    "Google Sheets Log": { "main": [[{ "node": "Réponse Webhook", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "recrutement" }, { "name": "ia" }]
 }
