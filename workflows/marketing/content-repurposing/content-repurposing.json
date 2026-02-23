@@ -1,0 +1,211 @@
+{
+  "name": "Re-Purpose de Contenus Existants Multi-Plateformes",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔄 Re-Purpose de Contenus Multi-Plateformes\n\n**Objectif :** Un contenu long (webinar, podcast, article, vidéo YouTube) → 15+ formats : threads Twitter, carrousels LinkedIn, posts courts, newsletter, citations, planning de publication.\n\n**Déclenchement :** Webhook POST\n```json\n{\n  \"contentUrl\": \"https://youtube.com/...\",\n  \"contentType\": \"video|podcast|article|webinar\",\n  \"brandVoice\": \"expert|casual|inspirational\"\n}\n```\n\n**Configuration :**\n- `$vars.OPENAI_API_KEY`\n- `$vars.BUFFER_ACCESS_TOKEN` (scheduling)\n- `$vars.NOTION_API_KEY` + `$vars.NOTION_CONTENT_DB_ID`\n- `$vars.CANVA_API_KEY` (pour visuels)",
+        "height": 320,
+        "width": 500
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-repurpose",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "🌐 Webhook - Contenu Source",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst contentUrl = body.contentUrl || '';\nconst contentType = body.contentType || 'video';\nconst brandVoice = body.brandVoice || 'expert';\nconst rawTranscript = body.transcript || body.text || '';\n\nif (!contentUrl && !rawTranscript) {\n  throw new Error('Provide contentUrl or transcript');\n}\n\n// Detect YouTube video ID\nlet youtubeId = '';\nconst ytMatch = contentUrl.match(/(?:youtube\\.com\\/watch\\?v=|youtu\\.be\\/)([\\w-]+)/);\nif (ytMatch) youtubeId = ytMatch[1];\n\nreturn [{\n  json: {\n    contentUrl,\n    contentType,\n    brandVoice,\n    rawTranscript,\n    youtubeId,\n    isYoutube: !!youtubeId,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate",
+      "name": "✅ Valider et Classifier Contenu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.isYoutube }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equal" }
+            }
+          ]
+        }
+      },
+      "id": "check-youtube",
+      "name": "📺 Est-ce YouTube?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/streamers~youtube-video-detail-scraper/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "token", "value": "={{ $vars.APIFY_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"startUrls\": [\"{{ $json.contentUrl }}\"],\"maxResults\": 1,\"includeTranscript\": true}"
+      },
+      "id": "scrape-youtube",
+      "name": "📺 Extraire Transcription YouTube",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/apify~website-content-crawler/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": [
+          { "name": "token", "value": "={{ $vars.APIFY_TOKEN }}" }
+        ],
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"startUrls\": [{\"url\": \"{{ $json.contentUrl }}\"}],\"maxCrawlPages\": 1}"
+      },
+      "id": "scrape-article",
+      "name": "📄 Extraire Contenu Article/Blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare the source content for repurposing\nconst inputData = $('✅ Valider et Classifier Contenu').item.json;\nlet sourceText = inputData.rawTranscript || '';\n\n// Try to get from YouTube scrape\nconst ytData = $input.first().json;\nif (Array.isArray(ytData) && ytData[0]) {\n  sourceText = ytData[0].transcript || ytData[0].text || ytData[0].description || sourceText;\n} else if (ytData.text || ytData.transcript) {\n  sourceText = ytData.text || ytData.transcript || sourceText;\n}\n\nif (!sourceText || sourceText.length < 100) {\n  sourceText = 'Transcription non disponible. Utilisation de la description: ' + (ytData.description || ytData[0]?.description || '');\n}\n\n// Truncate if too long (keep first 6000 chars for API)\nconst truncatedText = sourceText.substring(0, 6000);\n\nreturn [{\n  json: {\n    sourceText: truncatedText,\n    contentType: inputData.contentType,\n    brandVoice: inputData.brandVoice,\n    contentUrl: inputData.contentUrl,\n    wordCount: sourceText.split(' ').length\n  }\n}];"
+      },
+      "id": "prepare-content",
+      "name": "⚙️ Préparer Contenu Source",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en content marketing et copywriting multiplateforme. Tu crées du contenu viral et engageant adapté à chaque réseau social. Style: professionnel mais accessible, français."
+            },
+            {
+              "role": "user",
+              "content": "=Transforme ce contenu source en 15 formats différents:\n\n**Contenu source ({{ $json.contentType }}):**\n{{ $json.sourceText }}\n\n**Ton de marque:** {{ $json.brandVoice }}\n\nCrée les formats suivants en JSON:\n{\n  \"keyPoints\": [\"point1\", \"point2\", \"point3\", \"point4\", \"point5\"],\n  \"linkedinCarousel\": {\n    \"slides\": [{\"title\": \"...\", \"content\": \"...\"}],\n    \"hook\": \"...\",\n    \"cta\": \"...\"\n  },\n  \"linkedinPosts\": [\n    {\"type\": \"insight\", \"content\": \"...\", \"hashtags\": []},\n    {\"type\": \"story\", \"content\": \"...\", \"hashtags\": []},\n    {\"type\": \"tips\", \"content\": \"...\", \"hashtags\": []}\n  ],\n  \"twitterThreads\": [\n    {\"hook\": \"...\", \"tweets\": [\"tweet1\", \"tweet2\", \"tweet3\"], \"cta\": \"...\"}\n  ],\n  \"newsletter\": {\n    \"subject\": \"...\",\n    \"preheader\": \"...\",\n    \"body\": \"...\",\n    \"cta\": \"...\"\n  },\n  \"quotes\": [\"citation1\", \"citation2\", \"citation3\"],\n  \"shortPost\": \"post court 50 mots max\",\n  \"summary\": \"résumé 200 mots\",\n  \"publishingSchedule\": [\n    {\"day\": 1, \"platform\": \"LinkedIn\", \"contentType\": \"carousel\", \"time\": \"08:30\"},\n    {\"day\": 2, \"platform\": \"Twitter\", \"contentType\": \"thread\", \"time\": \"12:00\"}\n  ]\n}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 4000,
+          "response_format": { "type": "json_object" }
+        }
+      },
+      "id": "generate-formats",
+      "name": "🤖 Générer 15 Formats de Contenu",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiResponse = $input.first().json;\nconst rawContent = aiResponse.message?.content || aiResponse.choices?.[0]?.message?.content || '{}';\n\nlet repurposedContent;\ntry {\n  repurposedContent = JSON.parse(rawContent);\n} catch(e) {\n  repurposedContent = { error: 'Parse error', raw: rawContent };\n}\n\nconst sourceUrl = $('✅ Valider et Classifier Contenu').item.json.contentUrl;\n\nreturn [{\n  json: {\n    ...repurposedContent,\n    sourceUrl,\n    generatedAt: new Date().toISOString(),\n    totalFormats: (\n      (repurposedContent.linkedinPosts?.length || 0) +\n      (repurposedContent.twitterThreads?.length || 0) +\n      (repurposedContent.linkedinCarousel ? 1 : 0) +\n      (repurposedContent.newsletter ? 1 : 0) +\n      (repurposedContent.quotes?.length || 0)\n    )\n  }\n}];"
+      },
+      "id": "parse-formats",
+      "name": "📄 Parser et Organiser les Formats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.NOTION_API_KEY }}" },
+            { "name": "Notion-Version", "value": "2022-06-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"parent\": {\"database_id\": \"{{ $vars.NOTION_CONTENT_DB_ID }}\"},\n  \"properties\": {\n    \"Titre\": {\"title\": [{\"text\": {\"content\": \"Repurpose - \" + new Date().toLocaleDateString('fr-FR')}}]},\n    \"Source URL\": {\"url\": \"{{ $json.sourceUrl }}\"},\n    \"Formats Générés\": {\"number\": {{ $json.totalFormats }}},\n    \"Statut\": {\"select\": {\"name\": \"À planifier\"}},\n    \"Date\": {\"date\": {\"start\": \"{{ new Date().toISOString().split('T')[0] }}\"}}\n  },\n  \"children\": [\n    {\n      \"object\": \"block\",\n      \"type\": \"heading_2\",\n      \"heading_2\": {\"rich_text\": [{\"type\": \"text\",\"text\": {\"content\": \"📌 Points Clés\"}}]}\n    },\n    {\n      \"object\": \"block\",\n      \"type\": \"bulleted_list_item\",\n      \"bulleted_list_item\": {\"rich_text\": [{\"type\": \"text\",\"text\": {\"content\": {{ JSON.stringify($json.keyPoints?.join('\\n• ') || '') }}}}]}\n    },\n    {\n      \"object\": \"block\",\n      \"type\": \"heading_2\",\n      \"heading_2\": {\"rich_text\": [{\"type\": \"text\",\"text\": {\"content\": \"💼 Posts LinkedIn\"}}]}\n    },\n    {\n      \"object\": \"block\",\n      \"type\": \"paragraph\",\n      \"paragraph\": {\"rich_text\": [{\"type\": \"text\",\"text\": {\"content\": {{ JSON.stringify($json.linkedinPosts?.map(p => p.content).join('\\n\\n---\\n\\n') || '') }}}}]}\n    },\n    {\n      \"object\": \"block\",\n      \"type\": \"heading_2\",\n      \"heading_2\": {\"rich_text\": [{\"type\": \"text\",\"text\": {\"content\": \"🐦 Thread Twitter\"}}]}\n    },\n    {\n      \"object\": \"block\",\n      \"type\": \"paragraph\",\n      \"paragraph\": {\"rich_text\": [{\"type\": \"text\",\"text\": {\"content\": {{ JSON.stringify($json.twitterThreads?.[0]?.tweets?.join('\\n\\n') || '') }}}}]}\n    }\n  ]\n}"
+      },
+      "id": "save-notion",
+      "name": "📝 Sauvegarder dans Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"totalFormats\": {{ $('📄 Parser et Organiser les Formats').item.json.totalFormats }},\n  \"notionPageUrl\": \"{{ $json.url }}\",\n  \"keyPoints\": {{ JSON.stringify($('📄 Parser et Organiser les Formats').item.json.keyPoints || []) }},\n  \"schedule\": {{ JSON.stringify($('📄 Parser et Organiser les Formats').item.json.publishingSchedule || []) }}\n}"
+      },
+      "id": "respond",
+      "name": "✅ Répondre avec Résultats",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2480, 340]
+    }
+  ],
+  "connections": {
+    "🌐 Webhook - Contenu Source": {
+      "main": [[{ "node": "✅ Valider et Classifier Contenu", "type": "main", "index": 0 }]]
+    },
+    "✅ Valider et Classifier Contenu": {
+      "main": [[{ "node": "📺 Est-ce YouTube?", "type": "main", "index": 0 }]]
+    },
+    "📺 Est-ce YouTube?": {
+      "main": [
+        [{ "node": "📺 Extraire Transcription YouTube", "type": "main", "index": 0 }],
+        [{ "node": "📄 Extraire Contenu Article/Blog", "type": "main", "index": 0 }]
+      ]
+    },
+    "📺 Extraire Transcription YouTube": {
+      "main": [[{ "node": "⚙️ Préparer Contenu Source", "type": "main", "index": 0 }]]
+    },
+    "📄 Extraire Contenu Article/Blog": {
+      "main": [[{ "node": "⚙️ Préparer Contenu Source", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Préparer Contenu Source": {
+      "main": [[{ "node": "🤖 Générer 15 Formats de Contenu", "type": "main", "index": 0 }]]
+    },
+    "🤖 Générer 15 Formats de Contenu": {
+      "main": [[{ "node": "📄 Parser et Organiser les Formats", "type": "main", "index": 0 }]]
+    },
+    "📄 Parser et Organiser les Formats": {
+      "main": [
+        [
+          { "node": "📝 Sauvegarder dans Notion", "type": "main", "index": 0 },
+          { "node": "✅ Répondre avec Résultats", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "content" }, { "name": "repurpose" }]
+}
