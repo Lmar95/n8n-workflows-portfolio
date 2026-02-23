@@ -1,13 +1,141 @@
 {
-  "name": "Contract Renewal Alerts",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["admin","renewals","contracts","retention"],
-  "meta": {
-    "description": "Watch contract expiry dates (licenses, services, subscriptions). At D-60, D-30, D-15 send personalized notifications to client + commercial + Customer Success. Auto-generate renewal contract draft with updated terms for rapid signature.",
-    "difficulty": "⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Relances Automatiques Renouvellement Contrats",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📋 Relances Contrats\n\n**Objectif:** Surveiller les dates d'échéance des contrats et envoyer des relances automatiques pour les renouvellements.\n\n**Déclencheur:** Quotidien à 8h\n\n**Variables requises:**\n- GOOGLE_SHEETS_ID_CONTRATS\n- SENDGRID_API_KEY\n- HUBSPOT_API_KEY\n- SLACK_WEBHOOK_URL",
+        "height": 200,
+        "width": 340
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1-5" }] }
+      },
+      "id": "daily-trigger",
+      "name": "Vérif Quotidienne 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_CONTRATS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Contrats", "__rl": true, "mode": "name" }
+      },
+      "id": "get-contracts",
+      "name": "Liste Contrats",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contracts = $input.all();\nconst today = new Date();\n\nconst urgentContracts = [];\n\nfor (const c of contracts) {\n  const contract = c.json;\n  if (!contract['Date Échéance'] || contract['Statut'] === 'Renouvelé') continue;\n  \n  const echeance = new Date(contract['Date Échéance']);\n  const daysUntilExpiry = Math.floor((echeance - today) / (1000 * 60 * 60 * 24));\n  \n  // Alertes: J-90, J-60, J-30, J-14, J-7\n  const alertDays = [90, 60, 30, 14, 7];\n  \n  if (alertDays.includes(daysUntilExpiry)) {\n    let urgency, message;\n    \n    if (daysUntilExpiry <= 7) {\n      urgency = 'CRITIQUE';\n      message = `⚠️ URGENT: Contrat expire dans ${daysUntilExpiry} jours!`;\n    } else if (daysUntilExpiry <= 30) {\n      urgency = 'HAUTE';\n      message = `📋 Contrat expire dans ${daysUntilExpiry} jours`;\n    } else {\n      urgency = 'NORMALE';\n      message = `ℹ️ Contrat expire dans ${daysUntilExpiry} jours`;\n    }\n    \n    urgentContracts.push({\n      ...contract,\n      daysUntilExpiry,\n      urgency,\n      message,\n      dateEcheanceFormatted: echeance.toLocaleDateString('fr-FR')\n    });\n  }\n}\n\nif (urgentContracts.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\nreturn urgentContracts.map(c => ({ json: c }));"
+      },
+      "id": "check-expiry",
+      "name": "Vérifier Expirations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "notTrue" }
+            }
+          ]
+        }
+      },
+      "id": "has-contracts",
+      "name": "Contrats à Traiter?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json['Email Client'] }}\"}]}], \"from\": {\"email\": \"{{$vars.ADMIN_EMAIL}}\", \"name\": \"{{$vars.COMPANY_NAME}}\"}, \"subject\": \"Renouvellement de votre contrat - Échéance {{ $json.dateEcheanceFormatted }}\", \"content\": [{\"type\": \"text/html\", \"value\": \"<h2>Rappel de Renouvellement de Contrat</h2><p>Bonjour {{ $json['Nom Client'] }},</p><p>Votre contrat <strong>{{ $json['Référence Contrat'] }}</strong> arrive à échéance le <strong>{{ $json.dateEcheanceFormatted }}</strong> (dans {{ $json.daysUntilExpiry }} jours).</p><p>Afin d'assurer la continuité de vos services, nous vous invitons à nous contacter pour discuter du renouvellement.</p><p><a href='{{$vars.BOOKING_URL}}' style='background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;'>Planifier un appel de renouvellement</a></p><p>Cordialement,<br>{{$vars.COMPANY_NAME}}</p>\"}]}"
+      },
+      "id": "send-reminder",
+      "name": "Email Relance Client",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.message }}\n\n*Client:* {{ $json['Nom Client'] }}\n*Contrat:* {{ $json['Référence Contrat'] }}\n*Valeur:* {{ $json['Valeur Contrat'] }}\n*Échéance:* {{ $json.dateEcheanceFormatted }}\n*Commercial:* {{ $json['Commercial Responsable'] }}"
+            }
+          ]
+        }
+      },
+      "id": "slack-alert",
+      "name": "Alerte Équipe Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 400]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_CONTRATS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Contrats", "__rl": true, "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Dernière Relance": "={{ new Date().toISOString().split('T')[0] }}",
+            "Nb Relances": "={{ (parseInt($json['Nb Relances'] || 0) + 1).toString() }}"
+          }
+        }
+      },
+      "id": "update-log",
+      "name": "Mettre à Jour Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1640, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    }
+  ],
+  "connections": {
+    "Vérif Quotidienne 8h": { "main": [[{ "node": "Liste Contrats", "type": "main", "index": 0 }]] },
+    "Liste Contrats": { "main": [[{ "node": "Vérifier Expirations", "type": "main", "index": 0 }]] },
+    "Vérifier Expirations": { "main": [[{ "node": "Contrats à Traiter?", "type": "main", "index": 0 }]] },
+    "Contrats à Traiter?": {
+      "main": [
+        [
+          { "node": "Email Relance Client", "type": "main", "index": 0 },
+          { "node": "Alerte Équipe Slack", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Email Relance Client": { "main": [[{ "node": "Mettre à Jour Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "admin" }, { "name": "contrats" }, { "name": "relances" }]
 }
