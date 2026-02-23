@@ -1,13 +1,164 @@
 {
-  "name": "Employee Onboarding",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["hr","onboarding","employees","automation"],
-  "meta": {
-    "description": "New hire signs contract = automated 30–90 day onboarding journey: account provisioning, equipment ordering, training schedule, team introductions, required readings, first projects, regular manager check-ins. Progress tracked, blockers detected, D+30 and D+90 feedback collected.",
-    "difficulty": "⭐⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Onboarding Automatisé Nouveaux Employés",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🚀 Onboarding Automatisé Nouveaux Employés\n\n**Objectif:** Automatiser tout le processus d'onboarding: création de comptes, envoi de documents, planning J1, formation initiale.\n\n**Déclencheur:** Nouveau record dans Google Sheets onglet 'Arrivées' ou webhook RH\n\n**Variables requises:**\n- SLACK_BOT_TOKEN\n- GOOGLE_WORKSPACE_ADMIN_TOKEN\n- NOTION_API_KEY\n- SENDGRID_API_KEY\n- GOOGLE_SHEETS_ID_RH",
+        "height": 260,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-employee",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Nouvel Employé",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "new-employee-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const emp = $input.first().json;\n\n// Générer email professionnel\nconst firstName = emp.prenom?.toLowerCase().replace(/[^a-z]/g, '') || '';\nconst lastName = emp.nom?.toLowerCase().replace(/[^a-z]/g, '') || '';\nconst email = `${firstName}.${lastName}@${emp.domaine || 'company.com'}`;\n\n// Planning onboarding\nconst today = new Date();\nconst dateArrivee = emp.date_arrivee ? new Date(emp.date_arrivee) : today;\n\nreturn [{\n  json: {\n    ...emp,\n    emailProfessionnel: email,\n    dateArrivee: dateArrivee.toISOString().split('T')[0],\n    nomComplet: `${emp.prenom} ${emp.nom}`,\n    planning: [\n      { jour: 'J1 - Matin', activite: 'Accueil, visite locaux, présentation équipe' },\n      { jour: 'J1 - Après-midi', activite: 'Configuration poste, accès outils, présentation mission' },\n      { jour: 'J2', activite: 'Formation outils internes, rencontres équipes clés' },\n      { jour: 'J3-J5', activite: 'Immersion dans les projets en cours' },\n      { jour: 'Semaine 2', activite: 'Premiers projets autonomes avec accompagnement' }\n    ]\n  }\n}];"
+      },
+      "id": "prepare-onboarding",
+      "name": "Préparer Onboarding",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://admin.googleapis.com/admin/directory/v1/users",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.GOOGLE_WORKSPACE_ADMIN_TOKEN}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"primaryEmail\": \"{{ $json.emailProfessionnel }}\", \"name\": {\"givenName\": \"{{ $json.prenom }}\", \"familyName\": \"{{ $json.nom }}\"}, \"password\": \"TempPass123!\", \"changePasswordAtNextLogin\": true}"
+      },
+      "id": "create-google-account",
+      "name": "Créer Compte Google",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 160]
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/users.admin.invite",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SLACK_BOT_TOKEN}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "email", "value": "={{ $json.emailProfessionnel }}" },
+            { "name": "first_name", "value": "={{ $json.prenom }}" },
+            { "name": "last_name", "value": "={{ $json.nom }}" }
+          ]
+        }
+      },
+      "id": "invite-slack",
+      "name": "Inviter Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.NOTION_API_KEY}}" },
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"parent\": {\"database_id\": \"{{$vars.NOTION_DB_ONBOARDING_ID}}\"}, \"properties\": {\"Nom\": {\"title\": [{\"text\": {\"content\": \"{{ $json.nomComplet }}\"}}]}, \"Email\": {\"email\": \"{{ $json.emailProfessionnel }}\"}, \"Poste\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $json.poste }}\"}}]}, \"Date Arrivée\": {\"date\": {\"start\": \"{{ $json.dateArrivee }}\"}}, \"Statut\": {\"select\": {\"name\": \"En cours\"}}}}"
+      },
+      "id": "create-notion-page",
+      "name": "Créer Page Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 440]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.email_perso }}\", \"name\": \"{{ $json.nomComplet }}\"}]}], \"from\": {\"email\": \"{{$vars.RH_EMAIL}}\", \"name\": \"Équipe RH\"}, \"subject\": \"Bienvenue chez nous {{ $json.prenom }} ! 🎉\", \"content\": [{\"type\": \"text/html\", \"value\": \"<h1>Bienvenue {{ $json.prenom }} !</h1><p>Nous sommes ravis de vous accueillir le {{ $json.dateArrivee }} pour votre poste de {{ $json.poste }}.</p><h2>Vos accès</h2><p>Email: <strong>{{ $json.emailProfessionnel }}</strong></p><p>Mot de passe temporaire: <strong>TempPass123!</strong> (à changer à la première connexion)</p><h2>Votre planning J1</h2><ul><li>9h00 - Accueil par l'équipe RH</li><li>10h00 - Visite des locaux</li><li>11h00 - Présentation de l'équipe</li><li>14h00 - Configuration de votre poste</li><li>16h00 - Réunion avec votre manager</li></ul><p>Des questions ? Répondez à cet email ou appelez le {{$vars.RH_PHONE}}.</p><p>À très bientôt !<br>L'équipe RH</p>\"}]}"
+      },
+      "id": "welcome-email",
+      "name": "Email Bienvenue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL_GENERAL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🎉 *Bienvenue à {{ $json.nomComplet }}!*\n\nNous accueillons {{ $json.prenom }} {{ $json.nom }} au poste de *{{ $json.poste }}* à partir du {{ $json.dateArrivee }}.\n\nN'hésitez pas à lui souhaiter la bienvenue! 👋"
+            }
+          ]
+        }
+      },
+      "id": "slack-announce",
+      "name": "Annonce Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 460]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"employe\": \"{{ $json.nomComplet }}\", \"email\": \"{{ $json.emailProfessionnel }}\", \"actions\": [\"Compte Google créé\", \"Invitation Slack envoyée\", \"Page Notion créée\", \"Email bienvenue envoyé\"]}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse Succès",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1400, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Nouvel Employé": { "main": [[{ "node": "Préparer Onboarding", "type": "main", "index": 0 }]] },
+    "Préparer Onboarding": {
+      "main": [[
+        { "node": "Créer Compte Google", "type": "main", "index": 0 },
+        { "node": "Inviter Slack", "type": "main", "index": 0 },
+        { "node": "Créer Page Notion", "type": "main", "index": 0 }
+      ]]
+    },
+    "Inviter Slack": { "main": [[{ "node": "Email Bienvenue", "type": "main", "index": 0 }]] },
+    "Email Bienvenue": { "main": [[{ "node": "Annonce Slack", "type": "main", "index": 0 }]] },
+    "Annonce Slack": { "main": [[{ "node": "Réponse Succès", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "onboarding" }, { "name": "automatisation" }]
 }
