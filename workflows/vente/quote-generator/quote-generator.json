@@ -1,0 +1,198 @@
+{
+  "name": "Création Automatique des Devis",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📋 Création Automatique des Devis\n\n**Objectif :** Un commercial remplit un formulaire simple → calcul automatique, génération PDF brandé numéroté, envoi client avec lien de paiement, synchronisation CRM + comptabilité + signature électronique.\n\n**Déclenchement :** Webhook POST ou Typeform trigger\n```json\n{\n  \"clientEmail\": \"client@exemple.fr\",\n  \"clientName\": \"Jean Dupont\",\n  \"company\": \"Acme Corp\",\n  \"items\": [{\"description\": \"Service\", \"quantity\": 1, \"unitPrice\": 1500, \"discount\": 0}],\n  \"paymentTerms\": \"30 jours\",\n  \"validDays\": 30\n}\n```\n\n**Configuration :**\n- `$vars.DOCUSIGN_ACCOUNT_ID` + `$vars.DOCUSIGN_API_KEY`\n- `$vars.STRIPE_API_KEY`\n- `$vars.HUBSPOT_API_KEY`\n- `$vars.SENDGRID_API_KEY`\n- `$vars.COMPANY_NAME`, `$vars.COMPANY_VAT`",
+        "height": 340,
+        "width": 500
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create-quote",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "🌐 Webhook - Créer Devis",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and calculate quote\nconst body = $input.first().json.body || $input.first().json;\n\nconst items = body.items || [];\nif (items.length === 0) throw new Error('At least one item required');\n\n// Calculate totals\nconst calculations = items.map(item => {\n  const quantity = parseFloat(item.quantity) || 1;\n  const unitPrice = parseFloat(item.unitPrice) || 0;\n  const discountPct = parseFloat(item.discount) || 0;\n  const lineTotal = quantity * unitPrice;\n  const discountAmount = lineTotal * (discountPct / 100);\n  const lineNet = lineTotal - discountAmount;\n  \n  return {\n    ...item,\n    quantity,\n    unitPrice,\n    discountPct,\n    lineTotal,\n    discountAmount,\n    lineNet\n  };\n});\n\nconst subtotal = calculations.reduce((s, i) => s + i.lineNet, 0);\nconst vatRate = parseFloat(body.vatRate || 20) / 100;\nconst vatAmount = subtotal * vatRate;\nconst totalTTC = subtotal + vatAmount;\n\n// Generate unique quote number\nconst now = new Date();\nconst quoteNumber = `DEV-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}-${Date.now().toString().slice(-4)}`;\n\nreturn [{\n  json: {\n    // Client info\n    clientEmail: body.clientEmail || '',\n    clientName: body.clientName || '',\n    clientCompany: body.company || '',\n    clientAddress: body.address || '',\n    clientVat: body.clientVat || '',\n    \n    // Deal info\n    dealId: body.dealId || '',\n    salesRep: body.salesRep || '',\n    \n    // Quote details\n    quoteNumber,\n    quoteDate: now.toLocaleDateString('fr-FR'),\n    validUntil: new Date(now.getTime() + (body.validDays || 30) * 86400000).toLocaleDateString('fr-FR'),\n    paymentTerms: body.paymentTerms || '30 jours fin de mois',\n    currency: body.currency || 'EUR',\n    \n    // Line items\n    items: calculations,\n    \n    // Totals\n    subtotalHT: subtotal.toFixed(2),\n    vatRate: body.vatRate || 20,\n    vatAmount: vatAmount.toFixed(2),\n    totalTTC: totalTTC.toFixed(2),\n    totalTTCNum: totalTTC,\n    \n    // Company info\n    sellerName: $vars.COMPANY_NAME || 'Votre Entreprise SAS',\n    sellerVat: $vars.COMPANY_VAT || 'FR12345678901',\n    sellerEmail: $vars.SALES_EMAIL || 'commercial@votre-entreprise.fr',\n    \n    generatedAt: now.toISOString()\n  }\n}];"
+      },
+      "id": "calculate",
+      "name": "⚙️ Calculer Totaux et Générer Numéro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build HTML document for PDF generation\nconst q = $input.first().json;\n\nconst itemsHTML = q.items.map(item => `\n  <tr>\n    <td style=\"padding: 12px; border-bottom: 1px solid #eee;\">${item.description}</td>\n    <td style=\"padding: 12px; border-bottom: 1px solid #eee; text-align:center;\">${item.quantity}</td>\n    <td style=\"padding: 12px; border-bottom: 1px solid #eee; text-align:right;\">${parseFloat(item.unitPrice).toFixed(2)} €</td>\n    <td style=\"padding: 12px; border-bottom: 1px solid #eee; text-align:center;\">${item.discountPct}%</td>\n    <td style=\"padding: 12px; border-bottom: 1px solid #eee; text-align:right; font-weight:bold;\">${item.lineNet.toFixed(2)} €</td>\n  </tr>\n`).join('');\n\nconst htmlContent = `<!DOCTYPE html>\n<html lang=\"fr\"><head><meta charset=\"UTF-8\">\n<style>\n  body { font-family: Arial, sans-serif; margin: 0; padding: 40px; color: #333; }\n  .header { display: flex; justify-content: space-between; margin-bottom: 40px; }\n  .logo { font-size: 24px; font-weight: bold; color: #1a1a2e; }\n  .quote-info { text-align: right; }\n  .badge { background: #1a1a2e; color: white; padding: 8px 20px; border-radius: 5px; font-size: 14px; }\n  .parties { display: flex; justify-content: space-between; margin: 30px 0; }\n  .party-box { background: #f8f9fa; padding: 20px; border-radius: 8px; width: 45%; }\n  .party-box h3 { color: #1a1a2e; margin-top: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }\n  table { width: 100%; border-collapse: collapse; margin: 20px 0; }\n  thead { background: #1a1a2e; color: white; }\n  thead th { padding: 12px; text-align: left; }\n  .totals { float: right; width: 300px; margin-top: 20px; }\n  .totals table td { padding: 8px 12px; }\n  .totals .total-row { background: #1a1a2e; color: white; font-weight: bold; font-size: 18px; }\n  .footer { margin-top: 60px; border-top: 1px solid #eee; padding-top: 20px; color: #666; font-size: 12px; }\n  .terms { background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; font-size: 12px; }\n  .validity { background: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 4px solid #f39c12; }\n</style>\n</head><body>\n<div class=\"header\">\n  <div>\n    <div class=\"logo\">${q.sellerName}</div>\n    <div style=\"margin-top:5px; color:#666; font-size:14px;\">${q.sellerEmail}</div>\n    <div style=\"margin-top:5px; color:#666; font-size:12px;\">TVA: ${q.sellerVat}</div>\n  </div>\n  <div class=\"quote-info\">\n    <div class=\"badge\">DEVIS</div>\n    <div style=\"margin-top:10px; font-size:18px; font-weight:bold;\">${q.quoteNumber}</div>\n    <div style=\"color:#666;\">Date: ${q.quoteDate}</div>\n  </div>\n</div>\n\n<div class=\"validity\">⏰ Devis valable jusqu'au <strong>${q.validUntil}</strong></div>\n\n<div class=\"parties\">\n  <div class=\"party-box\">\n    <h3>Émetteur</h3>\n    <strong>${q.sellerName}</strong><br/>\n    ${q.sellerVat}\n  </div>\n  <div class=\"party-box\">\n    <h3>Client</h3>\n    <strong>${q.clientName}</strong><br/>\n    ${q.clientCompany}<br/>\n    ${q.clientAddress || ''}<br/>\n    ${q.clientVat || ''}\n  </div>\n</div>\n\n<table>\n  <thead>\n    <tr>\n      <th>Description</th>\n      <th style=\"text-align:center\">Qté</th>\n      <th style=\"text-align:right\">Prix unitaire HT</th>\n      <th style=\"text-align:center\">Remise</th>\n      <th style=\"text-align:right\">Total HT</th>\n    </tr>\n  </thead>\n  <tbody>${itemsHTML}</tbody>\n</table>\n\n<div style=\"clear:both\">\n<div class=\"totals\">\n  <table>\n    <tr><td>Total HT</td><td style=\"text-align:right\">${q.subtotalHT} €</td></tr>\n    <tr><td>TVA (${q.vatRate}%)</td><td style=\"text-align:right\">${q.vatAmount} €</td></tr>\n    <tr class=\"total-row\"><td>Total TTC</td><td style=\"text-align:right\">${q.totalTTC} €</td></tr>\n  </table>\n</div>\n</div>\n\n<div class=\"terms\">\n  <strong>Conditions de paiement:</strong> ${q.paymentTerms}<br/>\n  <strong>Mode de règlement:</strong> Virement bancaire, CB ou chèque\n</div>\n\n<div class=\"footer\">\n  <p>Ce devis est valable ${30} jours à compter de sa date d'émission.</p>\n  <p>Pour accepter ce devis, veuillez signer électroniquement ou retourner un bon de commande signé.</p>\n  <p>${q.sellerName} - ${q.sellerVat}</p>\n</div>\n</body></html>`;\n\nreturn [{ json: { ...q, htmlContent } }];"
+      },
+      "id": "build-html",
+      "name": "📄 Générer HTML du Devis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pdfco.com/v1/pdf/convert/from/html",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $vars.PDFCO_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"html\": {{ JSON.stringify($json.htmlContent) }},\"name\": \"{{ $json.quoteNumber }}.pdf\",\"paperSize\": \"A4\",\"orientation\": \"Portrait\",\"printBackground\": true}"
+      },
+      "id": "generate-pdf",
+      "name": "📑 Convertir en PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/payment_links",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "line_items[0][price_data][currency]",
+              "value": "eur"
+            },
+            {
+              "name": "line_items[0][price_data][product_data][name]",
+              "value": "={{ $json.quoteNumber + ' - ' + $json.clientCompany }}"
+            },
+            {
+              "name": "line_items[0][price_data][unit_amount]",
+              "value": "={{ Math.round($json.totalTTCNum * 100) }}"
+            },
+            {
+              "name": "line_items[0][quantity]",
+              "value": "1"
+            },
+            {
+              "name": "metadata[quote_number]",
+              "value": "={{ $json.quoteNumber }}"
+            }
+          ]
+        }
+      },
+      "id": "create-payment-link",
+      "name": "💳 Créer Lien de Paiement Stripe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine PDF URL and payment link\nconst pdfData = $('📑 Convertir en PDF').item.json;\nconst paymentData = $('💳 Créer Lien de Paiement Stripe').item.json;\nconst quoteData = $('📄 Générer HTML du Devis').item.json;\n\nreturn [{\n  json: {\n    ...quoteData,\n    pdfUrl: pdfData.url || pdfData.resultPageUrl || '',\n    paymentUrl: paymentData.url || '',\n    paymentLinkId: paymentData.id || ''\n  }\n}];"
+      },
+      "id": "merge-outputs",
+      "name": "🔗 Fusionner PDF + Paiement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.SENDGRID_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"personalizations\": [{\n    \"to\": [{\"email\": \"{{ $json.clientEmail }}\", \"name\": \"{{ $json.clientName }}\"}],\n    \"subject\": \"Votre devis {{ $json.quoteNumber }} - {{ $json.totalTTC }} €\"\n  }],\n  \"from\": {\"email\": \"{{ $json.sellerEmail }}\", \"name\": \"{{ $json.sellerName }}\"},\n  \"content\": [{\n    \"type\": \"text/html\",\n    \"value\": \"<html><body style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;'><h2>Bonjour {{ $json.clientName }},</h2><p>Veuillez trouver ci-dessous votre devis <strong>{{ $json.quoteNumber }}</strong>.</p><div style='background:#f8f9fa;padding:20px;border-radius:8px;margin:20px 0;'><table style='width:100%;'><tr><td>Montant HT:</td><td style='text-align:right'><strong>{{ $json.subtotalHT }} €</strong></td></tr><tr><td>TVA ({{ $json.vatRate }}%):</td><td style='text-align:right'>{{ $json.vatAmount }} €</td></tr><tr style='background:#1a1a2e;color:white;'><td style='padding:10px'><strong>Total TTC:</strong></td><td style='text-align:right;padding:10px'><strong>{{ $json.totalTTC }} €</strong></td></tr></table></div><p>⏰ Ce devis est valable jusqu'au <strong>{{ $json.validUntil }}</strong></p><div style='text-align:center;margin:30px 0;'><a href='{{ $json.paymentUrl }}' style='background:#27ae60;color:white;padding:15px 30px;border-radius:8px;text-decoration:none;font-size:16px;font-weight:bold;'>💳 Payer en ligne maintenant</a></div><p>Vous pouvez également télécharger votre devis PDF: <a href='{{ $json.pdfUrl }}'>Télécharger le devis</a></p><p>Pour toute question, contactez-nous à {{ $json.sellerEmail }}</p><p>Cordialement,<br/>{{ $json.sellerName }}</p></body></html>\"\n  }]\n}"
+      },
+      "id": "send-email",
+      "name": "📧 Envoyer Devis par Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "update",
+        "dealId": "={{ $json.dealId }}",
+        "updateFields": {
+          "dealstage": "contractsent",
+          "amount": "={{ $json.totalTTCNum }}"
+        }
+      },
+      "id": "update-crm",
+      "name": "🔵 Mettre à Jour Deal CRM",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [2000, 340]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"quoteNumber\": \"{{ $('📄 Générer HTML du Devis').item.json.quoteNumber }}\",\n  \"totalTTC\": \"{{ $('📄 Générer HTML du Devis').item.json.totalTTC }} €\",\n  \"pdfUrl\": \"{{ $('🔗 Fusionner PDF + Paiement').item.json.pdfUrl }}\",\n  \"paymentUrl\": \"{{ $('🔗 Fusionner PDF + Paiement').item.json.paymentUrl }}\",\n  \"emailSent\": true,\n  \"validUntil\": \"{{ $('📄 Générer HTML du Devis').item.json.validUntil }}\"\n}"
+      },
+      "id": "respond",
+      "name": "✅ Confirmer Création Devis",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2240, 340]
+    }
+  ],
+  "connections": {
+    "🌐 Webhook - Créer Devis": {
+      "main": [[{ "node": "⚙️ Calculer Totaux et Générer Numéro", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Calculer Totaux et Générer Numéro": {
+      "main": [[{ "node": "📄 Générer HTML du Devis", "type": "main", "index": 0 }]]
+    },
+    "📄 Générer HTML du Devis": {
+      "main": [
+        [
+          { "node": "📑 Convertir en PDF", "type": "main", "index": 0 },
+          { "node": "💳 Créer Lien de Paiement Stripe", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📑 Convertir en PDF": {
+      "main": [[{ "node": "🔗 Fusionner PDF + Paiement", "type": "main", "index": 0 }]]
+    },
+    "💳 Créer Lien de Paiement Stripe": {
+      "main": [[{ "node": "🔗 Fusionner PDF + Paiement", "type": "main", "index": 1 }]]
+    },
+    "🔗 Fusionner PDF + Paiement": {
+      "main": [[{ "node": "📧 Envoyer Devis par Email", "type": "main", "index": 0 }]]
+    },
+    "📧 Envoyer Devis par Email": {
+      "main": [[{ "node": "🔵 Mettre à Jour Deal CRM", "type": "main", "index": 0 }]]
+    },
+    "🔵 Mettre à Jour Deal CRM": {
+      "main": [[{ "node": "✅ Confirmer Création Devis", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "devis" }, { "name": "facturation" }]
+}
