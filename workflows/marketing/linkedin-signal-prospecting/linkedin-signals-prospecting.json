@@ -1,0 +1,237 @@
+{
+  "name": "Prospection Automatisée sur Signaux LinkedIn",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🎯 Prospection LinkedIn sur Signaux\n\n**Objectif :** Détecter les changements de poste, anniversaires d'entreprise et posts indiquant des problématiques. Enrichir les profils, scorer la pertinence et envoyer une séquence de 3-4 messages personnalisés.\n\n**Déclenchement :** Tous les jours à 8h30\n\n**Configuration :**\n- `$vars.PHANTOMBUSTER_API_KEY` : Clé Phantombuster\n- `$vars.DROPCONTACT_API_KEY` : Clé Dropcontact\n- `$vars.LEMLIST_API_KEY` : Clé Lemlist\n- `$vars.ICP_CRITERIA` : JSON des critères ICP `{\"titles\":[\"Head of Sales\",\"VP Sales\"],\"companySize\":\"50-500\"}`\n- `$vars.LEMLIST_CAMPAIGN_ID` : ID de la campagne Lemlist",
+        "height": 300,
+        "width": 520
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "30 8 * * 1-5" }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "⏰ Déclencheur Jours Ouvrés 8h30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.phantombuster.com/api/v2/agents/launch",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Phantombuster-Key", "value": "={{ $vars.PHANTOMBUSTER_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"id\": \"{{ $vars.PHANTOMBUSTER_AGENT_ID_JOB_CHANGES }}\",\"argument\": {\"numberOfProfilesToProcess\": 20,\"sessionCookie\": \"{{ $vars.LINKEDIN_SESSION_COOKIE }}\"}}"
+      },
+      "id": "phantom-job-changes",
+      "name": "👤 Détecter Changements de Poste",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.phantombuster.com/api/v2/agents/launch",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Phantombuster-Key", "value": "={{ $vars.PHANTOMBUSTER_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"id\": \"{{ $vars.PHANTOMBUSTER_AGENT_ID_POSTS }}\",\"argument\": {\"searches\": [\"recrutement difficile\",\"besoin CRM\",\"automatisation\"],\"numberOfResultsPerSearch\": 10,\"sessionCookie\": \"{{ $vars.LINKEDIN_SESSION_COOKIE }}\"}}"
+      },
+      "id": "phantom-posts",
+      "name": "📝 Détecter Posts Signaux Métier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 460]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.phantombuster.com/api/v2/agents/{{ $vars.PHANTOMBUSTER_AGENT_ID_JOB_CHANGES }}/output",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Phantombuster-Key", "value": "={{ $vars.PHANTOMBUSTER_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "get-phantom-results",
+      "name": "📥 Récupérer Résultats Phantom",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and score leads from LinkedIn signals\nconst data = $input.first().json;\nconst leads = data.output || data.resultObject || data || [];\n\nlet icpCriteria;\ntry {\n  icpCriteria = JSON.parse($vars.ICP_CRITERIA || '{}');\n} catch(e) {\n  icpCriteria = {\n    titles: ['Head of Sales', 'VP Sales', 'Directeur Commercial', 'Chief Revenue Officer', 'CEO', 'Fondateur'],\n    industries: ['SaaS', 'Tech', 'E-commerce', 'Conseil'],\n    companySizeMin: 20,\n    companySizeMax: 500\n  };\n}\n\nconst scoredLeads = [];\nconst leadsArray = Array.isArray(leads) ? leads : [leads];\n\nfor (const lead of leadsArray) {\n  if (!lead.firstName && !lead.fullName) continue;\n  \n  let score = 0;\n  const reasons = [];\n  \n  // Score by title match\n  const title = (lead.title || lead.jobTitle || '').toLowerCase();\n  const titleMatch = (icpCriteria.titles || []).some(t => title.includes(t.toLowerCase()));\n  if (titleMatch) { score += 40; reasons.push('✅ Titre ICP'); }\n  \n  // Score by trigger type\n  if (lead.trigger === 'job_change' || lead.newPosition) {\n    score += 30;\n    reasons.push('🔄 Changement de poste (timing parfait)');\n  }\n  if (lead.trigger === 'post_signal') {\n    score += 20;\n    reasons.push('📝 Signal via post LinkedIn');\n  }\n  \n  // Score by company size\n  const employees = parseInt(lead.companyEmployees || lead.nbEmployees || 0);\n  if (employees >= (icpCriteria.companySizeMin || 20) && employees <= (icpCriteria.companySizeMax || 500)) {\n    score += 20;\n    reasons.push('🏢 Taille entreprise dans la cible');\n  }\n  \n  // Score by industry\n  const industry = (lead.industry || '').toLowerCase();\n  const industryMatch = (icpCriteria.industries || []).some(i => industry.includes(i.toLowerCase()));\n  if (industryMatch) { score += 10; reasons.push('🎯 Secteur ICP'); }\n  \n  if (score >= 40) {\n    scoredLeads.push({\n      firstName: lead.firstName || lead.fullName?.split(' ')[0] || 'Prénom',\n      lastName: lead.lastName || lead.fullName?.split(' ').slice(1).join(' ') || '',\n      fullName: lead.fullName || `${lead.firstName} ${lead.lastName}`,\n      title: lead.title || lead.jobTitle || '',\n      company: lead.company || lead.companyName || '',\n      linkedinUrl: lead.profileUrl || lead.linkedinUrl || '',\n      email: lead.email || '',\n      trigger: lead.trigger || 'job_change',\n      newPosition: lead.newPosition || lead.title || '',\n      previousPosition: lead.previousPosition || '',\n      score,\n      reasons,\n      personalizedMessage: generateMessage(lead)\n    });\n  }\n}\n\nfunction generateMessage(lead) {\n  const firstName = lead.firstName || 'Bonjour';\n  const company = lead.company || lead.companyName || 'votre entreprise';\n  if (lead.trigger === 'job_change' || lead.newPosition) {\n    return `Bonjour ${firstName},\\n\\nFélicitations pour votre prise de poste chez ${company} ! Les 90 premiers jours sont souvent l'occasion de mettre en place de nouvelles méthodes et outils.\\n\\nNous aidons les équipes comme la vôtre à [VALEUR SPÉCIFIQUE]. Auriez-vous 15 minutes pour échanger ?\\n\\nCordialement`;\n  }\n  return `Bonjour ${firstName},\\n\\nJ'ai vu votre post sur LinkedIn et je me reconnais dans cette problématique...`;\n}\n\n// Sort by score\nscoredLeads.sort((a, b) => b.score - a.score);\n\nreturn scoredLeads.slice(0, 20).map(l => ({ json: l }));"
+      },
+      "id": "score-leads",
+      "name": "🎯 Scorer et Filtrer les Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.dropcontact.io/v1/enrich",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Access-Token", "value": "={{ $vars.DROPCONTACT_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"data\": [{\"first_name\": \"{{ $json.firstName }}\",\"last_name\": \"{{ $json.lastName }}\",\"company\": \"{{ $json.company }}\",\"linkedin\": \"{{ $json.linkedinUrl }}\"}],\"siren\": true,\"language\": \"fr\"}"
+      },
+      "id": "enrich-contact",
+      "name": "📧 Enrichir Contact (Dropcontact)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge enrichment data with lead data\nconst enrichData = $input.first().json;\nconst leadData = $('🎯 Scorer et Filtrer les Leads').item.json;\n\nconst enrichedResult = enrichData.data?.[0] || {};\nconst email = enrichedResult.email?.[0]?.email || leadData.email || '';\n\nreturn [{\n  json: {\n    ...leadData,\n    email,\n    phone: enrichedResult.phone?.[0]?.number || '',\n    siren: enrichedResult.siren || '',\n    companyRevenue: enrichedResult.company_revenue || '',\n    companySize: enrichedResult.company_nb_employees || '',\n    isEnriched: !!email,\n    readyForOutreach: !!email && leadData.score >= 50\n  }\n}];"
+      },
+      "id": "merge-enrichment",
+      "name": "🔗 Fusionner Données Enrichissement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.readyForOutreach }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equal" }
+            }
+          ]
+        }
+      },
+      "id": "check-ready",
+      "name": "🚀 Prêt pour Outreach?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.lemlist.com/api/campaigns/{{ $vars.LEMLIST_CAMPAIGN_ID }}/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Basic {{ Buffer.from(':' + $vars.LEMLIST_API_KEY).toString('base64') }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"email\": \"{{ $json.email }}\",\n  \"firstName\": \"{{ $json.firstName }}\",\n  \"lastName\": \"{{ $json.lastName }}\",\n  \"companyName\": \"{{ $json.company }}\",\n  \"jobTitle\": \"{{ $json.title }}\",\n  \"linkedinUrl\": \"{{ $json.linkedinUrl }}\",\n  \"icebreaker\": \"{{ $json.personalizedMessage }}\",\n  \"signal\": \"{{ $json.trigger }}\",\n  \"newPosition\": \"{{ $json.newPosition }}\",\n  \"score\": {{ $json.score }}\n}"
+      },
+      "id": "add-to-lemlist",
+      "name": "📤 Ajouter à la Séquence Lemlist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 220]
+    },
+    {
+      "parameters": {
+        "resource": "spreadsheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $vars.PROSPECTING_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ new Date().toISOString().split('T')[0] }}",
+            "Nom": "={{ $json.fullName }}",
+            "Poste": "={{ $json.title }}",
+            "Entreprise": "={{ $json.company }}",
+            "Email": "={{ $json.email }}",
+            "LinkedIn": "={{ $json.linkedinUrl }}",
+            "Score": "={{ $json.score }}",
+            "Trigger": "={{ $json.trigger }}",
+            "Statut": "En séquence"
+          }
+        }
+      },
+      "id": "log-to-sheets",
+      "name": "📊 Logguer dans Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [2240, 460]
+    }
+  ],
+  "connections": {
+    "⏰ Déclencheur Jours Ouvrés 8h30": {
+      "main": [
+        [
+          { "node": "👤 Détecter Changements de Poste", "type": "main", "index": 0 },
+          { "node": "📝 Détecter Posts Signaux Métier", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "👤 Détecter Changements de Poste": {
+      "main": [[{ "node": "📥 Récupérer Résultats Phantom", "type": "main", "index": 0 }]]
+    },
+    "📥 Récupérer Résultats Phantom": {
+      "main": [[{ "node": "🎯 Scorer et Filtrer les Leads", "type": "main", "index": 0 }]]
+    },
+    "🎯 Scorer et Filtrer les Leads": {
+      "main": [[{ "node": "📧 Enrichir Contact (Dropcontact)", "type": "main", "index": 0 }]]
+    },
+    "📧 Enrichir Contact (Dropcontact)": {
+      "main": [[{ "node": "🔗 Fusionner Données Enrichissement", "type": "main", "index": 0 }]]
+    },
+    "🔗 Fusionner Données Enrichissement": {
+      "main": [[{ "node": "🚀 Prêt pour Outreach?", "type": "main", "index": 0 }]]
+    },
+    "🚀 Prêt pour Outreach?": {
+      "main": [
+        [{ "node": "📤 Ajouter à la Séquence Lemlist", "type": "main", "index": 0 }],
+        [{ "node": "📊 Logguer dans Google Sheets", "type": "main", "index": 0 }]
+      ]
+    },
+    "📤 Ajouter à la Séquence Lemlist": {
+      "main": [[{ "node": "📊 Logguer dans Google Sheets", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "prospection" }, { "name": "linkedin" }]
+}
