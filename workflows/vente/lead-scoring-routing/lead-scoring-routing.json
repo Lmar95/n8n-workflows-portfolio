@@ -1,0 +1,142 @@
+{
+  "name": "Scoring Automatique Leads et Priorisation Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🎯 Scoring Automatique Leads\n\n**Objectif:** Score tous les leads en temps réel selon des critères firmographiques, comportementaux et d'engagement. Prioriser le pipeline de vente.\n\n**Déclencheur:** Nouveau lead HubSpot ou mise à jour propriété\n\n**Variables requises:**\n- HUBSPOT_API_KEY\n- OPENAI_API_KEY\n- SLACK_WEBHOOK_URL_VENTE",
+        "height": 220,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-scoring",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Lead Update",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "lead-scoring-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/{{$json.contactId}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.HUBSPOT_API_KEY}}" }]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "properties", "value": "email,firstname,lastname,company,jobtitle,industry,num_employees,website,phone,hs_email_open_count,hs_email_click_count,num_associated_deals,notes_last_contacted,lifecyclestage" }
+          ]
+        }
+      },
+      "id": "get-contact",
+      "name": "Récupérer Contact HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const contact = $input.first().json.properties;\n\nlet score = 0;\nlet scoreDetails = [];\n\n// === SCORING FIRMOGRAPHIQUE (40 points max) ===\n\n// Taille entreprise\nconst employees = parseInt(contact.num_employees || 0);\nif (employees >= 500) { score += 15; scoreDetails.push('Grande entreprise: +15'); }\nelse if (employees >= 100) { score += 10; scoreDetails.push('Moyenne entreprise: +10'); }\nelse if (employees >= 20) { score += 5; scoreDetails.push('PME: +5'); }\n\n// Secteur cible (selon ICP)\nconst targetIndustries = ['technology', 'software', 'saas', 'ecommerce', 'retail', 'manufacturing'];\nconst industry = contact.industry?.toLowerCase() || '';\nif (targetIndustries.some(i => industry.includes(i))) {\n  score += 15; scoreDetails.push('Secteur cible: +15');\n}\n\n// Job title (décisionnaire)\nconst deciderTitles = ['ceo', 'cto', 'cmo', 'coo', 'directeur', 'vp', 'head of', 'responsable', 'manager'];\nconst jobTitle = contact.jobtitle?.toLowerCase() || '';\nif (deciderTitles.some(t => jobTitle.includes(t))) {\n  score += 10; scoreDetails.push('Décisionnaire: +10');\n}\n\n// === SCORING ENGAGEMENT (35 points max) ===\n\n// Emails ouverts\nconst emailOpens = parseInt(contact.hs_email_open_count || 0);\nif (emailOpens >= 10) { score += 15; scoreDetails.push(`${emailOpens} emails ouverts: +15`); }\nelse if (emailOpens >= 5) { score += 10; scoreDetails.push(`${emailOpens} emails ouverts: +10`); }\nelse if (emailOpens >= 1) { score += 5; scoreDetails.push(`${emailOpens} email ouvert: +5`); }\n\n// Clics emails\nconst emailClicks = parseInt(contact.hs_email_click_count || 0);\nif (emailClicks >= 5) { score += 10; scoreDetails.push(`${emailClicks} clics emails: +10`); }\nelse if (emailClicks >= 1) { score += 5; scoreDetails.push(`${emailClicks} clic email: +5`); }\n\n// Deals associés\nconst deals = parseInt(contact.num_associated_deals || 0);\nif (deals > 0) { score += 10; scoreDetails.push('Deal créé: +10'); }\n\n// === SCORING DONNÉES (25 points max) ===\n\nif (contact.phone) { score += 5; scoreDetails.push('Téléphone disponible: +5'); }\nif (contact.company) { score += 5; scoreDetails.push('Entreprise renseignée: +5'); }\nif (contact.website) { score += 5; scoreDetails.push('Site web disponible: +5'); }\nif (contact.jobtitle) { score += 5; scoreDetails.push('Titre renseigné: +5'); }\nif (contact.industry) { score += 5; scoreDetails.push('Secteur renseigné: +5'); }\n\n// Catégorisation\nconst categorie = score >= 75 ? 'HOT' : score >= 50 ? 'WARM' : score >= 25 ? 'COLD' : 'UNQUALIFIED';\nconst priorite = score >= 75 ? 1 : score >= 50 ? 2 : 3;\n\nreturn [{\n  json: {\n    contactId: $('Webhook Lead Update').first().json.contactId,\n    email: contact.email,\n    nom: `${contact.firstname} ${contact.lastname}`,\n    entreprise: contact.company,\n    poste: contact.jobtitle,\n    score,\n    categorie,\n    priorite,\n    scoreDetails: scoreDetails.join(', '),\n    contact\n  }\n}];"
+      },
+      "id": "calculate-score",
+      "name": "Calculer Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/{{$json.contactId}}",
+        "method": "PATCH",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.HUBSPOT_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"properties\": {\"lead_score\": \"{{ $json.score }}\", \"lead_category\": \"{{ $json.categorie }}\", \"lead_priority\": \"{{ $json.priorite }}\"}}"
+      },
+      "id": "update-hubspot",
+      "name": "Mettre à Jour HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.categorie }}",
+              "rightValue": "HOT",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-hot",
+      "name": "Lead HOT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL_VENTE}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🔥 *Lead HOT détecté!*\n\n*Contact:* {{ $json.nom }}\n*Entreprise:* {{ $json.entreprise }}\n*Poste:* {{ $json.poste }}\n*Email:* {{ $json.email }}\n\n*Score:* {{ $json.score }}/100\n*Détail:* {{ $json.scoreDetails }}\n\n✅ À contacter en priorité aujourd'hui!"
+            }
+          ]
+        }
+      },
+      "id": "slack-hot-alert",
+      "name": "Alerte Lead HOT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 160]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"score\": {{ $json.score }}, \"categorie\": \"{{ $json.categorie }}\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1640, 380]
+    }
+  ],
+  "connections": {
+    "Webhook Lead Update": { "main": [[{ "node": "Récupérer Contact HubSpot", "type": "main", "index": 0 }]] },
+    "Récupérer Contact HubSpot": { "main": [[{ "node": "Calculer Score Lead", "type": "main", "index": 0 }]] },
+    "Calculer Score Lead": { "main": [[{ "node": "Mettre à Jour HubSpot", "type": "main", "index": 0 }]] },
+    "Mettre à Jour HubSpot": { "main": [[{ "node": "Lead HOT?", "type": "main", "index": 0 }]] },
+    "Lead HOT?": {
+      "main": [
+        [{ "node": "Alerte Lead HOT", "type": "main", "index": 0 }],
+        [{ "node": "Réponse", "type": "main", "index": 0 }]
+      ]
+    },
+    "Alerte Lead HOT": { "main": [[{ "node": "Réponse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "leads" }, { "name": "scoring" }]
+}
