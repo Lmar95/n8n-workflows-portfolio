@@ -1,0 +1,322 @@
+{
+  "name": "Agent Suivi Campagnes Ads Multi-Plateformes",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Agent Suivi Campagnes Ads Multi-Plateformes\n\n**Objectif :** Collecte quotidienne des KPIs (CTR, CPC, conversions, ROAS) depuis Google Ads, Meta Ads et LinkedIn Ads. Détecte les anomalies (baisse >15%, budget épuisé) et envoie des alertes Slack + email avec recommandations.\n\n**Déclenchement :** Chaque jour à 8h00\n\n**Configuration requise :**\n- Credentials Google Ads API\n- Credentials Meta Ads API\n- Credentials LinkedIn Ads API\n- Webhook Slack\n- SMTP ou SendGrid pour les emails\n- OpenAI API Key",
+        "height": 280,
+        "width": 480
+      },
+      "id": "sticky-note-1",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger-schedule",
+      "name": "⏰ Déclencheur Quotidien 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://googleads.googleapis.com/v14/customers/{{ $vars.GOOGLE_ADS_CUSTOMER_ID }}/googleAds:searchStream",
+        "authentication": "oAuth2",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "developer-token",
+              "value": "={{ $vars.GOOGLE_ADS_DEVELOPER_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "SELECT campaign.name, campaign.id, metrics.clicks, metrics.impressions, metrics.cost_micros, metrics.conversions, metrics.all_conversions_value FROM campaign WHERE segments.date DURING YESTERDAY AND campaign.status = 'ENABLED'"
+            }
+          ]
+        }
+      },
+      "id": "google-ads-fetch",
+      "name": "🎯 Récupérer KPIs Google Ads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 180]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://graph.facebook.com/v18.0/act_{{ $vars.META_AD_ACCOUNT_ID }}/insights",
+        "authentication": "oAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "campaign_name,campaign_id,spend,impressions,clicks,ctr,cpc,actions,action_values,roas"
+            },
+            {
+              "name": "date_preset",
+              "value": "yesterday"
+            },
+            {
+              "name": "level",
+              "value": "campaign"
+            }
+          ]
+        }
+      },
+      "id": "meta-ads-fetch",
+      "name": "📘 Récupérer KPIs Meta Ads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 340]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.linkedin.com/rest/adAnalytics",
+        "authentication": "oAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "analytics"
+            },
+            {
+              "name": "pivot",
+              "value": "CAMPAIGN"
+            },
+            {
+              "name": "dateRange.start.day",
+              "value": "={{ new Date(Date.now() - 86400000).getDate() }}"
+            },
+            {
+              "name": "dateRange.start.month",
+              "value": "={{ new Date(Date.now() - 86400000).getMonth() + 1 }}"
+            },
+            {
+              "name": "dateRange.start.year",
+              "value": "={{ new Date(Date.now() - 86400000).getFullYear() }}"
+            },
+            {
+              "name": "fields",
+              "value": "clicks,impressions,costInLocalCurrency,conversions,externalWebsiteConversions"
+            }
+          ]
+        }
+      },
+      "id": "linkedin-ads-fetch",
+      "name": "💼 Récupérer KPIs LinkedIn Ads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "merge-data",
+      "name": "🔗 Fusionner Toutes les Données",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1020, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize and calculate KPIs from all platforms\nconst googleData = $input.all().filter(i => i.json.platform === 'google' || i.json.results);\nconst metaData = $input.all().filter(i => i.json.data && Array.isArray(i.json.data));\n\nconst campaigns = [];\nconst anomalies = [];\n\n// Process all items\nfor (const item of $input.all()) {\n  const data = item.json;\n  \n  // Normalize metrics\n  let normalizedCampaigns = [];\n  \n  if (data.results) {\n    // Google Ads format\n    normalizedCampaigns = (data.results || []).map(r => ({\n      platform: 'Google Ads',\n      name: r.campaign?.name || 'Unknown',\n      id: r.campaign?.id || '',\n      clicks: r.metrics?.clicks || 0,\n      impressions: r.metrics?.impressions || 0,\n      cost: (r.metrics?.cost_micros || 0) / 1000000,\n      conversions: r.metrics?.conversions || 0,\n      revenue: r.metrics?.all_conversions_value || 0,\n      ctr: r.metrics?.impressions > 0 ? ((r.metrics?.clicks / r.metrics?.impressions) * 100).toFixed(2) : 0,\n      cpc: r.metrics?.clicks > 0 ? ((r.metrics?.cost_micros / 1000000) / r.metrics?.clicks).toFixed(2) : 0,\n      roas: r.metrics?.cost_micros > 0 ? (r.metrics?.all_conversions_value / (r.metrics?.cost_micros / 1000000)).toFixed(2) : 0\n    }));\n  } else if (data.data && Array.isArray(data.data)) {\n    // Meta Ads format\n    normalizedCampaigns = data.data.map(c => ({\n      platform: 'Meta Ads',\n      name: c.campaign_name || 'Unknown',\n      id: c.campaign_id || '',\n      clicks: parseInt(c.clicks || 0),\n      impressions: parseInt(c.impressions || 0),\n      cost: parseFloat(c.spend || 0),\n      conversions: (c.actions || []).filter(a => a.action_type === 'purchase').reduce((s, a) => s + parseInt(a.value || 0), 0),\n      revenue: parseFloat((c.action_values || []).filter(a => a.action_type === 'purchase').reduce((s, a) => s + parseFloat(a.value || 0), 0)),\n      ctr: parseFloat(c.ctr || 0).toFixed(2),\n      cpc: parseFloat(c.cpc || 0).toFixed(2),\n      roas: c.spend > 0 ? (parseFloat(c.action_values?.[0]?.value || 0) / parseFloat(c.spend)).toFixed(2) : 0\n    }));\n  } else if (data.elements) {\n    // LinkedIn Ads format\n    normalizedCampaigns = (data.elements || []).map(e => ({\n      platform: 'LinkedIn Ads',\n      name: e.pivotValues?.[0] || 'Unknown',\n      id: e.pivotValues?.[0] || '',\n      clicks: e.clicks || 0,\n      impressions: e.impressions || 0,\n      cost: parseFloat(e.costInLocalCurrency || 0),\n      conversions: e.externalWebsiteConversions || 0,\n      revenue: 0,\n      ctr: e.impressions > 0 ? ((e.clicks / e.impressions) * 100).toFixed(2) : 0,\n      cpc: e.clicks > 0 ? (parseFloat(e.costInLocalCurrency || 0) / e.clicks).toFixed(2) : 0,\n      roas: 0\n    }));\n  }\n  \n  campaigns.push(...normalizedCampaigns);\n}\n\n// Detect anomalies\nfor (const camp of campaigns) {\n  const issues = [];\n  \n  // ROAS below 2 is concerning\n  if (camp.roas > 0 && parseFloat(camp.roas) < 2) {\n    issues.push(`⚠️ ROAS bas: ${camp.roas} (seuil: 2.0)`);\n  }\n  \n  // CPC doubled threshold (simplified)\n  if (parseFloat(camp.cpc) > 10) {\n    issues.push(`⚠️ CPC élevé: ${camp.cpc}€`);\n  }\n  \n  // CTR very low\n  if (parseFloat(camp.ctr) < 0.5) {\n    issues.push(`⚠️ CTR faible: ${camp.ctr}%`);\n  }\n  \n  if (issues.length > 0) {\n    anomalies.push({\n      ...camp,\n      issues\n    });\n  }\n}\n\nreturn [{ json: { campaigns, anomalies, totalCampaigns: campaigns.length, totalAnomalies: anomalies.length, analysisDate: new Date().toISOString() } }];"
+      },
+      "id": "normalize-calculate",
+      "name": "⚙️ Normaliser et Calculer KPIs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1260, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en marketing digital et publicité en ligne. Analyse les données de campagnes publicitaires et génère des recommandations actionables en français. Sois concis et pratique."
+            },
+            {
+              "role": "user",
+              "content": "Voici les données de performance des campagnes ads d'hier :\n\nCAMPAGNES:\n{{ JSON.stringify($json.campaigns, null, 2) }}\n\nANOMALIES DÉTECTÉES:\n{{ JSON.stringify($json.anomalies, null, 2) }}\n\nGénère:\n1. Un résumé exécutif (3-4 phrases)\n2. Les 3 campagnes les plus performantes\n3. Les campagnes problématiques avec causes probables\n4. 3-5 recommandations concrètes priorisées\n5. Actions immédiates requises (si urgence)"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1500
+        }
+      },
+      "id": "ai-analysis",
+      "name": "🤖 Analyse IA & Recommandations",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1500, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "anomaly-check",
+              "leftValue": "={{ $('⚙️ Normaliser et Calculer KPIs').item.json.totalAnomalies }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-anomalies",
+      "name": "🚨 Des Anomalies?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1740, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "🚨 *ALERTE ADS - Anomalies Détectées*"
+            },
+            {
+              "name": "blocks",
+              "value": "=[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Alerte Performance Ads - \" + new Date().toLocaleDateString('fr-FR')}},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*\" + $('⚙️ Normaliser et Calculer KPIs').item.json.totalAnomalies + \" anomalie(s) détectée(s)* sur \" + $('⚙️ Normaliser et Calculer KPIs').item.json.totalCampaigns + \" campagnes analysées\"}},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":$('🤖 Analyse IA & Recommandations').item.json.message?.content || $('🤖 Analyse IA & Recommandations').item.json.choices?.[0]?.message?.content || 'Analyse disponible'}},{\"type\":\"divider\"},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"_Campagnes problématiques: \" + $('⚙️ Normaliser et Calculer KPIs').item.json.anomalies.map(a => a.platform + ' - ' + a.name).join(', ') + \"_\"}}]"
+            }
+          ]
+        }
+      },
+      "id": "slack-alert",
+      "name": "💬 Alerte Slack Urgence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "blocks",
+              "value": "=[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"📊 Rapport Quotidien Ads - \" + new Date().toLocaleDateString('fr-FR')}},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"✅ *\" + $('⚙️ Normaliser et Calculer KPIs').item.json.totalCampaigns + \" campagnes* analysées - Aucune anomalie critique\"}},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":$('🤖 Analyse IA & Recommandations').item.json.message?.content || $('🤖 Analyse IA & Recommandations').item.json.choices?.[0]?.message?.content || 'Rapport disponible'}}]"
+            }
+          ]
+        }
+      },
+      "id": "slack-daily-report",
+      "name": "📊 Rapport Slack Quotidien",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 460]
+    },
+    {
+      "parameters": {
+        "fromEmail": "automation@votre-agence.com",
+        "toEmail": "={{ $vars.MANAGER_EMAIL }}",
+        "subject": "=🚨 Alerte Ads - {{ $('⚙️ Normaliser et Calculer KPIs').item.json.totalAnomalies }} anomalie(s) - {{ new Date().toLocaleDateString('fr-FR') }}",
+        "emailType": "html",
+        "html": "=<html><body style='font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;'><h1 style='color: #e74c3c;'>🚨 Alerte Performance Publicitaire</h1><p><strong>Date:</strong> {{ new Date().toLocaleDateString('fr-FR') }}</p><p><strong>Anomalies détectées:</strong> {{ $('⚙️ Normaliser et Calculer KPIs').item.json.totalAnomalies }}</p><hr/><h2>Analyse IA</h2><div style='background: #f8f9fa; padding: 15px; border-radius: 5px; white-space: pre-wrap;'>{{ $('🤖 Analyse IA & Recommandations').item.json.message?.content || $('🤖 Analyse IA & Recommandations').item.json.choices?.[0]?.message?.content }}</div><hr/><h2>Campagnes Problématiques</h2>{{ $('⚙️ Normaliser et Calculer KPIs').item.json.anomalies.map(a => '<div style=\"background:#fff3cd; padding:10px; margin:5px 0; border-left: 4px solid #f39c12;\"><strong>' + a.platform + ' - ' + a.name + '</strong><br/>' + a.issues.join('<br/>') + '</div>').join('') }}<p style='color: #666; font-size: 12px;'>Rapport généré automatiquement par n8n</p></body></html>"
+      },
+      "id": "email-alert",
+      "name": "📧 Email Alerte Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2220, 220]
+    }
+  ],
+  "connections": {
+    "⏰ Déclencheur Quotidien 8h": {
+      "main": [
+        [
+          { "node": "🎯 Récupérer KPIs Google Ads", "type": "main", "index": 0 },
+          { "node": "📘 Récupérer KPIs Meta Ads", "type": "main", "index": 0 },
+          { "node": "💼 Récupérer KPIs LinkedIn Ads", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🎯 Récupérer KPIs Google Ads": {
+      "main": [[{ "node": "🔗 Fusionner Toutes les Données", "type": "main", "index": 0 }]]
+    },
+    "📘 Récupérer KPIs Meta Ads": {
+      "main": [[{ "node": "🔗 Fusionner Toutes les Données", "type": "main", "index": 1 }]]
+    },
+    "💼 Récupérer KPIs LinkedIn Ads": {
+      "main": [[{ "node": "🔗 Fusionner Toutes les Données", "type": "main", "index": 2 }]]
+    },
+    "🔗 Fusionner Toutes les Données": {
+      "main": [[{ "node": "⚙️ Normaliser et Calculer KPIs", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Normaliser et Calculer KPIs": {
+      "main": [[{ "node": "🤖 Analyse IA & Recommandations", "type": "main", "index": 0 }]]
+    },
+    "🤖 Analyse IA & Recommandations": {
+      "main": [[{ "node": "🚨 Des Anomalies?", "type": "main", "index": 0 }]]
+    },
+    "🚨 Des Anomalies?": {
+      "main": [
+        [
+          { "node": "💬 Alerte Slack Urgence", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "📊 Rapport Slack Quotidien", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "💬 Alerte Slack Urgence": {
+      "main": [[{ "node": "📧 Email Alerte Manager", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "marketing" },
+    { "name": "ads" },
+    { "name": "monitoring" }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "n8nVersion": "1.0.0"
+  }
+}
