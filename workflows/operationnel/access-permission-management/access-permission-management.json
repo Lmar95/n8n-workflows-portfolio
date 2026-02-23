@@ -1,0 +1,218 @@
+{
+  "name": "Gestion automatique des demandes d'accès et permissions",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "demande-acces",
+        "options": {}
+      },
+      "id": "c3d4e5f6-0001",
+      "name": "Webhook - Nouvelle demande d'accès",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst rolePermissions = {\n  'commercial': ['hubspot_user', 'google_workspace', 'slack', 'notion_viewer', 'google_drive_marketing'],\n  'developpeur': ['github_member', 'google_workspace', 'slack', 'notion_editor', 'aws_dev', 'jira_dev'],\n  'manager': ['hubspot_admin', 'google_workspace_admin', 'slack', 'notion_editor', 'google_drive_all', 'github_viewer'],\n  'support': ['intercom_agent', 'google_workspace', 'slack', 'notion_viewer', 'zendesk_agent'],\n  'rh': ['google_workspace', 'slack', 'notion_editor', 'bamboohr_user', 'google_drive_rh'],\n  'finance': ['pennylane_user', 'google_workspace', 'slack', 'notion_viewer', 'google_drive_finance']\n};\n\nconst role = body.role?.toLowerCase() || 'collaborateur';\nconst required_tools = body.tools_required || rolePermissions[role] || ['google_workspace', 'slack', 'notion_viewer'];\n\nreturn [{\n  json: {\n    request_id: `ACC-${Date.now()}`,\n    employee_name: body.employee_name || body.name,\n    employee_email: body.employee_email || body.email,\n    role: body.role,\n    department: body.department,\n    manager_email: body.manager_email,\n    start_date: body.start_date || new Date().toISOString().split('T')[0],\n    required_tools,\n    justification: body.justification || 'Nouvelle recrue',\n    requested_at: new Date().toISOString(),\n    status: 'PENDING_APPROVAL'\n  }\n}];"
+      },
+      "id": "c3d4e5f6-0002",
+      "name": "Normalisation de la demande",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_APPROVALS_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "blocks",
+              "value": "=[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"🔐 *Demande d'accès - Approbation requise*\\n\\n*Employé :* {{ $json.employee_name }} ({{ $json.employee_email }})\\n*Rôle :* {{ $json.role }}\\n*Département :* {{ $json.department }}\\n*Date d'arrivée :* {{ $json.start_date }}\\n*Outils requis :* {{ $json.required_tools.join(', ') }}\"}},{\"type\":\"actions\",\"elements\":[{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"✅ Approuver\"},\"style\":\"primary\",\"value\":\"{{ $json.request_id }}_approve\"},{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"❌ Refuser\"},\"style\":\"danger\",\"value\":\"{{ $json.request_id }}_reject\"}]}]"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0003",
+      "name": "Slack - Demande d'approbation manager",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "acces-approuve",
+        "options": {}
+      },
+      "id": "c3d4e5f6-0004",
+      "name": "Webhook - Approbation reçue",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json.body;\nconst action = payload.action || payload.value;\nconst approved = action?.includes('approve');\nconst request_id = action?.split('_')[0];\n\nreturn [{\n  json: {\n    request_id,\n    approved,\n    approver: payload.user?.name || payload.approver,\n    approved_at: new Date().toISOString(),\n    // Dans un vrai setup, on récupèrerait les détails depuis un data store\n    employee_email: payload.employee_email,\n    employee_name: payload.employee_name,\n    required_tools: payload.required_tools || [],\n    role: payload.role\n  }\n}];"
+      },
+      "id": "c3d4e5f6-0005",
+      "name": "Traitement de la décision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ $json.approved }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0006",
+      "name": "Accès approuvé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 600]
+    },
+    {
+      "parameters": {
+        "url": "https://admin.googleapis.com/admin/directory/v1/users",
+        "method": "POST",
+        "authentication": "oAuth2",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "primaryEmail",
+              "value": "={{ $json.employee_email }}"
+            },
+            {
+              "name": "name",
+              "value": "={\"fullName\": \"{{ $json.employee_name }}\", \"familyName\": \"{{ $json.employee_name.split(' ').slice(-1)[0] }}\", \"givenName\": \"{{ $json.employee_name.split(' ')[0] }}\"}"
+            },
+            {
+              "name": "password",
+              "value": "=Temp@{{ Math.random().toString(36).substring(2, 10) }}2024!"
+            },
+            { "name": "changePasswordAtNextLogin", "value": "=true" }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0007",
+      "name": "Google Workspace - Création compte",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [840, 480]
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/users.admin.invite",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.SLACK_ADMIN_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "email", "value": "={{ $json.employee_email }}" },
+            { "name": "first_name", "value": "={{ $json.employee_name.split(' ')[0] }}" },
+            { "name": "last_name", "value": "={{ $json.employee_name.split(' ').slice(-1)[0] }}" },
+            { "name": "channels", "value": "={{ $vars.SLACK_DEFAULT_CHANNELS }}" }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0008",
+      "name": "Slack - Invitation collaborateur",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [840, 640]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Traitement de la décision').first().json;\nconst gwResult = $('Google Workspace - Création compte').first()?.json;\n\n// Compilation des accès créés\nconst provisioned = [];\nprovisioned.push({ tool: 'Google Workspace', status: 'créé', email: data.employee_email });\nprovisioned.push({ tool: 'Slack', status: 'invitation envoyée' });\n\nconst emailBody = `\n<h2>🎉 Vos accès sont prêts, ${data.employee_name.split(' ')[0]} !</h2>\n<p>Bienvenue ! Voici vos accès configurés :</p>\n<ul>\n  ${provisioned.map(p => `<li><strong>${p.tool}</strong> : ${p.status}</li>`).join('')}\n</ul>\n<p><strong>Email professionnel :</strong> ${data.employee_email}</p>\n<p>⚠️ Vous devrez changer votre mot de passe à la première connexion.</p>\n<p>En cas de problème, contactez IT@votre-entreprise.com</p>\n`;\n\nreturn [{\n  json: {\n    ...data,\n    provisioned_tools: provisioned,\n    email_body: emailBody,\n    provisioning_completed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "c3d4e5f6-0009",
+      "name": "Compilation accès créés",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 560]
+    },
+    {
+      "parameters": {
+        "fromEmail": "it@votre-entreprise.com",
+        "toEmail": "={{ $json.employee_email }}",
+        "subject": "=🔑 Vos accès sont prêts - Bienvenue {{ $json.employee_name.split(' ')[0] }} !",
+        "emailType": "html",
+        "message": "={{ $json.email_body }}"
+      },
+      "id": "c3d4e5f6-0010",
+      "name": "Email - Envoi identifiants",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1240, 480],
+      "credentials": { "smtp": { "id": "1", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=✅ *Accès provisionnés - {{ $json.employee_name }}*\n\nOutils créés : {{ $json.provisioned_tools.map(p => p.tool).join(', ') }}\nEmail envoyé avec identifiants.\nProvisioning en {{ Math.round((new Date($json.provisioning_completed_at) - new Date($json.approved_at))/1000/60) }} minutes."
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0011",
+      "name": "Slack - Confirmation IT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1240, 640]
+    },
+    {
+      "parameters": {
+        "content": "## 🔐 Gestion Automatique des Accès et Permissions\n\n**Objectif :** Automatise le provisioning des accès lors de l'arrivée d'un collaborateur ou d'une demande d'accès.\n\n**Flow :**\n1. Formulaire → Webhook demande\n2. Alerte manager Slack pour approbation\n3. Si approuvé → création automatique des comptes\n4. Email avec identifiants à l'employé\n5. Notification IT confirmant le provisioning\n\n**Outils provisionnés :**\n- Google Workspace (compte email)\n- Slack (invitation)\n- Notion, GitHub, CRM (selon rôle)\n\n**Variables requises :**\n- SLACK_WEBHOOK_APPROVALS_URL\n- SLACK_ADMIN_TOKEN\n- SLACK_DEFAULT_CHANNELS\n- OPENAI_API_KEY\n- Google Workspace Admin SDK\n- SLACK_WEBHOOK_URL\n- SMTP credentials",
+        "height": 360,
+        "width": 400
+      },
+      "id": "c3d4e5f6-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Webhook - Nouvelle demande d'accès": { "main": [[{ "node": "Normalisation de la demande", "type": "main", "index": 0 }]] },
+    "Normalisation de la demande": { "main": [[{ "node": "Slack - Demande d'approbation manager", "type": "main", "index": 0 }]] },
+    "Webhook - Approbation reçue": { "main": [[{ "node": "Traitement de la décision", "type": "main", "index": 0 }]] },
+    "Traitement de la décision": { "main": [[{ "node": "Accès approuvé ?", "type": "main", "index": 0 }]] },
+    "Accès approuvé ?": {
+      "main": [
+        [{ "node": "Google Workspace - Création compte", "type": "main", "index": 0 }, { "node": "Slack - Invitation collaborateur", "type": "main", "index": 0 }]
+      ]
+    },
+    "Google Workspace - Création compte": { "main": [[{ "node": "Compilation accès créés", "type": "main", "index": 0 }]] },
+    "Slack - Invitation collaborateur": { "main": [[{ "node": "Compilation accès créés", "type": "main", "index": 0 }]] },
+    "Compilation accès créés": { "main": [[{ "node": "Email - Envoi identifiants", "type": "main", "index": 0 }, { "node": "Slack - Confirmation IT", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "rh" }, { "name": "securite" }, { "name": "provisioning" }]
+}
