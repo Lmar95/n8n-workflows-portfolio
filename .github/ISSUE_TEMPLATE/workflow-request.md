@@ -34,4 +34,4 @@ _How many records/events/tasks per day or week?_
 _Any other details, constraints, or integration requirements._
 
 ---
-📅 **Prefer to talk directly?** [Book a call](https://cal.com/agence-ooo/call-decouverte)
+📅 **Prefer to talk directly?** [Book a call](https://calendar.app.google/nYVee9km7fDYLcXw9)
