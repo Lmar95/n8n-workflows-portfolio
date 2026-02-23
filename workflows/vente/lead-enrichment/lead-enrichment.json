@@ -1,0 +1,264 @@
+{
+  "name": "Enrichissement Automatique des Leads",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔍 Enrichissement Automatique des Leads\n\n**Objectif :** À partir d'un email ou nom d'entreprise, enrichir avec 30+ données (poste, téléphone, LinkedIn, CA, effectifs, signaux d'intention) et centraliser dans le CRM en temps réel.\n\n**Déclenchement :**\n- Webhook (lead entrant)\n- Ou : HubSpot trigger (contact créé)\n\n**Configuration :**\n- `$vars.DROPCONTACT_API_KEY`\n- `$vars.HUBSPOT_API_KEY`\n- `$vars.CLEARBIT_API_KEY`\n- `$vars.HUNTER_API_KEY`\n- `$vars.SLACK_WEBHOOK_URL`",
+        "height": 260,
+        "width": 460
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-enrichment",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "🌐 Webhook - Nouveau Lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [560, 260]
+    },
+    {
+      "parameters": {
+        "eventsUI": {
+          "values": [{ "name": "contact.creation" }]
+        },
+        "additionalFields": {}
+      },
+      "id": "hubspot-trigger",
+      "name": "🔵 HubSpot - Contact Créé",
+      "type": "n8n-nodes-base.hubspotTrigger",
+      "typeVersion": 1,
+      "position": [560, 420]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "merge-triggers",
+      "name": "🔗 Fusionner Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize incoming lead data from any source\nconst data = $input.first().json;\nconst body = data.body || data;\n\nconst email = body.email || body.properties?.email?.value || '';\nconst firstName = body.firstName || body.first_name || body.properties?.firstname?.value || '';\nconst lastName = body.lastName || body.last_name || body.properties?.lastname?.value || '';\nconst company = body.company || body.properties?.company?.value || '';\nconst hubspotId = body.objectId || body.vid || body.id || '';\n\nif (!email && !company) {\n  throw new Error('Email or company name is required');\n}\n\nreturn [{\n  json: {\n    email,\n    firstName,\n    lastName,\n    fullName: `${firstName} ${lastName}`.trim(),\n    company,\n    hubspotId,\n    domain: email ? email.split('@')[1] : '',\n    receivedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "normalize",
+      "name": "⚙️ Normaliser Données du Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.dropcontact.io/v1/enrich",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Access-Token", "value": "={{ $vars.DROPCONTACT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"data\": [{\"first_name\": \"{{ $json.firstName }}\",\"last_name\": \"{{ $json.lastName }}\",\"email\": \"{{ $json.email }}\",\"company\": \"{{ $json.company }}\"}],\"siren\": true,\"language\": \"fr\"}"
+      },
+      "id": "dropcontact",
+      "name": "📧 Enrichir via Dropcontact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://company.clearbit.com/v2/companies/find",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "domain", "value": "={{ $('⚙️ Normaliser Données du Lead').item.json.domain }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.CLEARBIT_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "clearbit",
+      "name": "🏢 Enrichir Entreprise (Clearbit)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 340]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hunter.io/v2/email-finder",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "domain", "value": "={{ $('⚙️ Normaliser Données du Lead').item.json.domain }}" },
+            { "name": "first_name", "value": "={{ $('⚙️ Normaliser Données du Lead').item.json.firstName }}" },
+            { "name": "last_name", "value": "={{ $('⚙️ Normaliser Données du Lead').item.json.lastName }}" },
+            { "name": "api_key", "value": "={{ $vars.HUNTER_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "hunter",
+      "name": "🎯 Trouver Email (Hunter.io)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all enrichment data into comprehensive lead profile\nconst leadData = $('⚙️ Normaliser Données du Lead').item.json;\nconst dropcontactData = $('📧 Enrichir via Dropcontact').item.json?.data?.[0] || {};\nconst clearbitData = $('🏢 Enrichir Entreprise (Clearbit)').item.json || {};\nconst hunterData = $('🎯 Trouver Email (Hunter.io)').item.json?.data || {};\n\n// Build enriched profile\nconst enriched = {\n  // Contact info\n  email: dropcontactData.email?.[0]?.email || hunterData.email || leadData.email,\n  emailConfidence: hunterData.score || 0,\n  phone: dropcontactData.phone?.[0]?.number || '',\n  firstName: dropcontactData.first_name || leadData.firstName,\n  lastName: dropcontactData.last_name || leadData.lastName,\n  fullName: `${dropcontactData.first_name || leadData.firstName} ${dropcontactData.last_name || leadData.lastName}`.trim(),\n  title: dropcontactData.title || '',\n  seniority: dropcontactData.seniority || '',\n  linkedinUrl: dropcontactData.linkedin || '',\n  \n  // Company info from Clearbit\n  company: clearbitData.name || leadData.company,\n  companyDomain: clearbitData.domain || leadData.domain,\n  companyDescription: clearbitData.description || '',\n  companyIndustry: clearbitData.category?.industry || '',\n  companySector: clearbitData.category?.sector || '',\n  companyType: clearbitData.type || '',\n  companyCountry: clearbitData.geo?.country || 'France',\n  companyCity: clearbitData.geo?.city || '',\n  companyEmployees: clearbitData.metrics?.employees || dropcontactData.company_nb_employees || 0,\n  companyRevenue: clearbitData.metrics?.annualRevenue || '',\n  companyFounding: clearbitData.foundedYear || '',\n  companyTech: (clearbitData.tech || []).slice(0, 10).join(', '),\n  companyFunding: clearbitData.crunchbase?.handle ? 'Yes' : 'Unknown',\n  companyTwitterFollowers: clearbitData.metrics?.twitterFollowers || 0,\n  \n  // Additional from Dropcontact\n  siren: dropcontactData.siren || '',\n  tva: dropcontactData.tva_number || '',\n  companyRevenueBand: dropcontactData.company_revenue || '',\n  \n  // Lead scoring data\n  hubspotId: leadData.hubspotId,\n  enrichmentDate: new Date().toISOString(),\n  enrichmentSources: ['dropcontact', 'clearbit', 'hunter'].filter(s => {\n    if (s === 'dropcontact') return !!dropcontactData.email;\n    if (s === 'clearbit') return !!clearbitData.name;\n    if (s === 'hunter') return !!hunterData.email;\n    return false;\n  }),\n  dataQualityScore: Math.min(100, [\n    leadData.email ? 20 : 0,\n    !!dropcontactData.phone ? 15 : 0,\n    !!dropcontactData.linkedin ? 15 : 0,\n    clearbitData.metrics?.employees ? 20 : 0,\n    clearbitData.category?.industry ? 15 : 0,\n    dropcontactData.siren ? 15 : 0\n  ].reduce((a, b) => a + b, 0))\n};\n\nreturn [{ json: enriched }];"
+      },
+      "id": "merge-enrichment",
+      "name": "🔗 Fusionner Toutes les Données",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Score the lead based on enriched data\nconst lead = $input.first().json;\n\nlet score = 0;\nconst signals = [];\n\n// Firmographic scoring\nconst employees = parseInt(lead.companyEmployees) || 0;\nif (employees >= 50 && employees <= 500) { score += 20; signals.push('🏢 Taille entreprise idéale (50-500)'); }\nelse if (employees >= 20) { score += 10; signals.push('🏢 Taille entreprise acceptable'); }\n\n// Revenue scoring\nif (lead.companyRevenue && parseFloat(lead.companyRevenue) > 1000000) { score += 15; signals.push('💰 CA significatif'); }\n\n// Industry scoring\nconst targetIndustries = ['saas', 'software', 'technology', 'marketing', 'consulting', 'financial'];\nif (targetIndustries.some(i => (lead.companyIndustry || '').toLowerCase().includes(i))) {\n  score += 20;\n  signals.push('🎯 Secteur cible');\n}\n\n// Contact quality\nif (lead.email) { score += 15; signals.push('✅ Email vérifié'); }\nif (lead.phone) { score += 10; signals.push('📞 Téléphone disponible'); }\nif (lead.linkedinUrl) { score += 5; signals.push('💼 LinkedIn disponible'); }\n\n// Seniority scoring\nconst seniorTitles = ['ceo', 'coo', 'cto', 'director', 'head', 'vp', 'chief', 'founder', 'président'];\nif (seniorTitles.some(t => (lead.title || '').toLowerCase().includes(t))) {\n  score += 15;\n  signals.push('👔 Décideur senior');\n}\n\n// Data quality bonus\nif (lead.dataQualityScore > 80) { score += 10; signals.push('⭐ Données complètes'); }\n\nconst tier = score >= 70 ? 'HOT' : score >= 40 ? 'WARM' : 'COLD';\n\nreturn [{\n  json: {\n    ...lead,\n    leadScore: score,\n    leadTier: tier,\n    scoringSignals: signals,\n    recommendedAction: tier === 'HOT' ? 'Contact commercial immédiat' : tier === 'WARM' ? 'Séquence nurturing' : 'Liste de veille'\n  }\n}];"
+      },
+      "id": "score-lead",
+      "name": "🎯 Scorer le Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.hubspotId }}",
+        "additionalFields": {
+          "email": "={{ $json.email }}",
+          "firstname": "={{ $json.firstName }}",
+          "lastname": "={{ $json.lastName }}",
+          "phone": "={{ $json.phone }}",
+          "company": "={{ $json.company }}",
+          "industry": "={{ $json.companyIndustry }}",
+          "numemployees": "={{ $json.companyEmployees }}",
+          "jobtitle": "={{ $json.title }}",
+          "linkedinbio": "={{ $json.linkedinUrl }}",
+          "city": "={{ $json.companyCity }}",
+          "country": "={{ $json.companyCountry }}",
+          "hs_lead_status": "={{ $json.leadTier === 'HOT' ? 'IN_PROGRESS' : 'NEW' }}"
+        }
+      },
+      "id": "update-hubspot",
+      "name": "🔵 Mettre à Jour HubSpot",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [2000, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.leadTier }}",
+              "rightValue": "HOT",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-hot",
+      "name": "🔥 Lead HOT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\"type\": \"header\",\"text\": {\"type\": \"plain_text\",\"text\": \"🔥 Nouveau Lead HOT - Action Requise!\"}},\n    {\"type\": \"section\",\"fields\": [\n      {\"type\": \"mrkdwn\",\"text\": \"*Nom:*\\n{{ $json.fullName }}\"},\n      {\"type\": \"mrkdwn\",\"text\": \"*Entreprise:*\\n{{ $json.company }}\"},\n      {\"type\": \"mrkdwn\",\"text\": \"*Poste:*\\n{{ $json.title }}\"},\n      {\"type\": \"mrkdwn\",\"text\": \"*Score:*\\n{{ $json.leadScore }}/100\"}\n    ]},\n    {\"type\": \"section\",\"text\": {\"type\": \"mrkdwn\",\"text\": \"*Email:* {{ $json.email }}\\n*Tel:* {{ $json.phone }}\\n*LinkedIn:* {{ $json.linkedinUrl }}\"}},\n    {\"type\": \"section\",\"text\": {\"type\": \"mrkdwn\",\"text\": \"*Signaux:*\\n\" + {{ JSON.stringify($json.scoringSignals.join('\\n')) }}}}\n  ]\n}"
+      },
+      "id": "slack-hot-alert",
+      "name": "💬 Alerte Slack Lead HOT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 380]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"leadScore\": {{ $('🎯 Scorer le Lead').item.json.leadScore }},\n  \"leadTier\": \"{{ $('🎯 Scorer le Lead').item.json.leadTier }}\",\n  \"email\": \"{{ $('🎯 Scorer le Lead').item.json.email }}\",\n  \"company\": \"{{ $('🎯 Scorer le Lead').item.json.company }}\",\n  \"enrichmentSources\": {{ JSON.stringify($('🎯 Scorer le Lead').item.json.enrichmentSources) }},\n  \"recommendedAction\": \"{{ $('🎯 Scorer le Lead').item.json.recommendedAction }}\"\n}"
+      },
+      "id": "respond",
+      "name": "✅ Répondre avec Lead Enrichi",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2480, 340]
+    }
+  ],
+  "connections": {
+    "🌐 Webhook - Nouveau Lead": {
+      "main": [[{ "node": "🔗 Fusionner Sources", "type": "main", "index": 0 }]]
+    },
+    "🔵 HubSpot - Contact Créé": {
+      "main": [[{ "node": "🔗 Fusionner Sources", "type": "main", "index": 1 }]]
+    },
+    "🔗 Fusionner Sources": {
+      "main": [[{ "node": "⚙️ Normaliser Données du Lead", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Normaliser Données du Lead": {
+      "main": [
+        [
+          { "node": "📧 Enrichir via Dropcontact", "type": "main", "index": 0 },
+          { "node": "🏢 Enrichir Entreprise (Clearbit)", "type": "main", "index": 0 },
+          { "node": "🎯 Trouver Email (Hunter.io)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📧 Enrichir via Dropcontact": {
+      "main": [[{ "node": "🔗 Fusionner Toutes les Données", "type": "main", "index": 0 }]]
+    },
+    "🏢 Enrichir Entreprise (Clearbit)": {
+      "main": [[{ "node": "🔗 Fusionner Toutes les Données", "type": "main", "index": 1 }]]
+    },
+    "🎯 Trouver Email (Hunter.io)": {
+      "main": [[{ "node": "🔗 Fusionner Toutes les Données", "type": "main", "index": 2 }]]
+    },
+    "🔗 Fusionner Toutes les Données": {
+      "main": [[{ "node": "🎯 Scorer le Lead", "type": "main", "index": 0 }]]
+    },
+    "🎯 Scorer le Lead": {
+      "main": [
+        [
+          { "node": "🔵 Mettre à Jour HubSpot", "type": "main", "index": 0 },
+          { "node": "🔥 Lead HOT?", "type": "main", "index": 0 },
+          { "node": "✅ Répondre avec Lead Enrichi", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🔥 Lead HOT?": {
+      "main": [[{ "node": "💬 Alerte Slack Lead HOT", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "lead-enrichment" }, { "name": "crm" }]
+}
