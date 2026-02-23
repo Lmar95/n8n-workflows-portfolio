@@ -1,0 +1,180 @@
+{
+  "name": "Suivi de projet et alertes sur déviations planning/budget",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1,3,5" }] }
+      },
+      "id": "f1a2b3c4-0001",
+      "name": "Déclencheur - Monitoring Lun/Mer/Ven 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/databases/{{ $vars.NOTION_PROJECTS_DB_ID }}/query",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.NOTION_API_KEY }}" },
+            { "name": "Notion-Version", "value": "2022-06-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "filter",
+              "value": "={\"property\": \"Statut\", \"select\": {\"equals\": \"En cours\"}}"
+            }
+          ]
+        }
+      },
+      "id": "f1a2b3c4-0002",
+      "name": "Notion - Récupération projets actifs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://app.asana.com/api/1.0/projects?opt_fields=name,due_date,completed,current_status,members,notes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.ASANA_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "f1a2b3c4-0003",
+      "name": "Asana - Récupération projets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const notionProjects = $('Notion - Récupération projets actifs').first().json?.results || [];\nconst asanaProjects = $('Asana - Récupération projets').first().json?.data || [];\nconst now = new Date();\n\nconst projects = [];\n\n// Traitement projets Notion\nfor (const page of notionProjects) {\n  const props = page.properties;\n  const deadline = props.Deadline?.date?.start;\n  const budgetTotal = props.Budget?.number || 0;\n  const budgetUsed = props['Budget consommé']?.number || 0;\n  const progressExpected = props['Avancement prévu']?.number || 0;\n  const progressActual = props['Avancement réel']?.number || 0;\n  const manager = props.Manager?.people?.[0]?.name || 'N/A';\n  const name = props.Nom?.title?.[0]?.plain_text || 'Projet sans nom';\n  \n  const deadlineDate = deadline ? new Date(deadline) : null;\n  const daysToDeadline = deadlineDate ? Math.ceil((deadlineDate - now) / (1000*60*60*24)) : null;\n  \n  const budgetDeviation = budgetTotal > 0 ? ((budgetUsed - budgetTotal) / budgetTotal * 100) : 0;\n  const progressDeviation = progressExpected - progressActual;\n  \n  const alerts = [];\n  if (budgetDeviation > 15) alerts.push(`Budget dépassé de ${budgetDeviation.toFixed(0)}%`);\n  if (progressDeviation > 20) alerts.push(`Retard d'avancement de ${progressDeviation.toFixed(0)}%`);\n  if (daysToDeadline !== null && daysToDeadline < 7 && daysToDeadline > 0) alerts.push(`Deadline dans ${daysToDeadline} jours`);\n  if (daysToDeadline !== null && daysToDeadline <= 0) alerts.push(`Deadline DÉPASSÉE de ${Math.abs(daysToDeadline)} jours`);\n  \n  const risk_level = alerts.length >= 2 ? 'CRITIQUE' : alerts.length === 1 ? 'ATTENTION' : 'OK';\n  \n  projects.push({\n    source: 'notion',\n    project_id: page.id,\n    name,\n    manager,\n    deadline: deadline || 'N/A',\n    days_to_deadline: daysToDeadline,\n    budget_total: budgetTotal,\n    budget_used: budgetUsed,\n    budget_deviation_pct: Math.round(budgetDeviation),\n    progress_expected: progressExpected,\n    progress_actual: progressActual,\n    progress_deviation: Math.round(progressDeviation),\n    alerts,\n    risk_level,\n    has_alert: alerts.length > 0\n  });\n}\n\nconst criticalProjects = projects.filter(p => p.has_alert);\nconst okProjects = projects.filter(p => !p.has_alert);\n\nreturn [\n  { json: { all_projects: projects, critical_projects: criticalProjects, ok_count: okProjects.length, critical_count: criticalProjects.length, analyzed_at: now.toISOString() } }\n];"
+      },
+      "id": "f1a2b3c4-0004",
+      "name": "Analyse déviations et calcul risques",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ $json.critical_count }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        }
+      },
+      "id": "f1a2b3c4-0005",
+      "name": "Projets en alerte ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en gestion de projet. Tu analyses les déviations de projets et proposes des recommandations concrètes et actionnables pour remettre les projets sur les rails."
+            },
+            {
+              "role": "user",
+              "content": "=Analyse ces projets en alerte et génère des recommandations :\n\n{{ JSON.stringify($json.critical_projects, null, 2) }}\n\nPour chaque projet, génère en JSON :\n{\n  \"projects_analysis\": [\n    {\n      \"project_name\": \"...\",\n      \"risk_level\": \"CRITIQUE|ATTENTION\",\n      \"root_cause\": \"Cause probable de la déviation\",\n      \"recommended_actions\": [\"Action 1\", \"Action 2\"],\n      \"urgency\": \"Délai d'intervention recommandé\"\n    }\n  ],\n  \"global_health\": \"Évaluation globale du portefeuille de projets\"\n}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.4 }
+      },
+      "id": "f1a2b3c4-0006",
+      "name": "GPT-4 - Analyse et recommandations",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1040, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Analyse déviations et calcul risques').first().json;\nlet analysis;\ntry {\n  const raw = $input.first().json.message.content;\n  analysis = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  analysis = { projects_analysis: [], global_health: 'Analyse indisponible' };\n}\n\n// Construction message Slack\nconst criticalLines = data.critical_projects.map(p => {\n  const rec = analysis.projects_analysis?.find(a => a.project_name === p.name);\n  return `*${p.risk_level === 'CRITIQUE' ? '🔴' : '🟡'} ${p.name}*\\n` +\n    `  Alertes: ${p.alerts.join(' | ')}\\n` +\n    `  Manager: ${p.manager}\\n` +\n    (rec ? `  Recommandation: ${rec.recommended_actions?.[0] || 'Voir rapport'}` : '');\n}).join('\\n\\n');\n\nconst slackMessage = `📊 *Rapport Projets - ${new Date().toLocaleDateString('fr-FR')}*\\n\\n` +\n  `✅ ${data.ok_count} projets en bonne santé\\n` +\n  `⚠️ ${data.critical_count} projets nécessitent attention\\n\\n` +\n  criticalLines + `\\n\\n*Santé globale :* ${analysis.global_health}`;\n\nreturn [{\n  json: {\n    ...data,\n    analysis,\n    slack_message: slackMessage\n  }\n}];"
+      },
+      "id": "f1a2b3c4-0007",
+      "name": "Formattage rapport",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "text", "value": "={{ $json.slack_message }}" }
+          ]
+        }
+      },
+      "id": "f1a2b3c4-0008",
+      "name": "Slack - Alerte chefs de projet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{ $vars.GOOGLE_SHEET_PROJECTS_ID }}" },
+        "sheetName": "Historique",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.format('dd/MM/yyyy') }}",
+            "Projets analysés": "={{ $json.all_projects.length }}",
+            "Projets en alerte": "={{ $json.critical_count }}",
+            "Projets OK": "={{ $json.ok_count }}",
+            "Santé globale": "={{ $json.analysis.global_health }}"
+          }
+        }
+      },
+      "id": "f1a2b3c4-0009",
+      "name": "Google Sheets - Historique analyse",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1440, 380],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "1", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "content": "## 📊 Suivi Projets & Alertes Déviations\n\n**Objectif :** Monitore l'avancement et le budget de tous les projets actifs. Détecte les dérives (retard > 20%, budget > 15%) et envoie des alertes avec recommandations IA.\n\n**Déclencheur :** Lundi, Mercredi, Vendredi à 9h\n\n**Sources :** Notion (base projets) + Asana\n\n**Métriques analysées :**\n- Budget consommé vs alloué (seuil 15%)\n- Avancement réel vs prévu (seuil 20%)\n- Jours avant deadline\n- Délais dépassés\n\n**Variables requises :**\n- NOTION_API_KEY\n- NOTION_PROJECTS_DB_ID\n- ASANA_API_KEY\n- OPENAI_API_KEY\n- SLACK_WEBHOOK_URL\n- GOOGLE_SHEET_PROJECTS_ID",
+        "height": 320,
+        "width": 400
+      },
+      "id": "f1a2b3c4-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Déclencheur - Monitoring Lun/Mer/Ven 9h": { "main": [[{ "node": "Notion - Récupération projets actifs", "type": "main", "index": 0 }, { "node": "Asana - Récupération projets", "type": "main", "index": 0 }]] },
+    "Notion - Récupération projets actifs": { "main": [[{ "node": "Analyse déviations et calcul risques", "type": "main", "index": 0 }]] },
+    "Asana - Récupération projets": { "main": [[{ "node": "Analyse déviations et calcul risques", "type": "main", "index": 0 }]] },
+    "Analyse déviations et calcul risques": { "main": [[{ "node": "Projets en alerte ?", "type": "main", "index": 0 }]] },
+    "Projets en alerte ?": { "main": [[{ "node": "GPT-4 - Analyse et recommandations", "type": "main", "index": 0 }]] },
+    "GPT-4 - Analyse et recommandations": { "main": [[{ "node": "Formattage rapport", "type": "main", "index": 0 }]] },
+    "Formattage rapport": { "main": [[{ "node": "Slack - Alerte chefs de projet", "type": "main", "index": 0 }, { "node": "Google Sheets - Historique analyse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "gestion-projet" }, { "name": "alertes" }]
+}
