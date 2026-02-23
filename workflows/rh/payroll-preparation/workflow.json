@@ -1,13 +1,128 @@
 {
-  "name": "Payroll Preparation",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["hr","payroll","finance","automation"],
-  "meta": {
-    "description": "Automatically collect all payroll inputs: timesheets, PTO, sick leave, overtime, validated expense reports, bonuses, and variable pay elements. Calculate payslips according to collective agreement and individual contracts. Generate files for payroll software and deliver digital payslips.",
-    "difficulty": "⭐⭐⭐⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Gestion Automatisée Paie et Fiches de Paie",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 💰 Gestion Automatisée Paie\n\n**Objectif:** Calculer les paies mensuelles, générer les fiches de paie PDF et les distribuer automatiquement.\n\n**Déclencheur:** 25 de chaque mois à 8h\n\n**Variables requises:**\n- SENDGRID_API_KEY\n- GOOGLE_SHEETS_ID_PAIE\n- NOTION_API_KEY\n- SLACK_WEBHOOK_URL_RH",
+        "height": 220,
+        "width": 340
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 25 * *" }] }
+      },
+      "id": "monthly-trigger",
+      "name": "25 du Mois 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_PAIE}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Employés", "__rl": true, "mode": "name" },
+        "filters": {
+          "conditions": [{ "keyName": "Statut", "condition": "eq", "keyValue": "Actif" }]
+        }
+      },
+      "id": "get-employees",
+      "name": "Liste Employés Actifs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_PAIE}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Absences_Mois", "__rl": true, "mode": "name" }
+      },
+      "id": "get-absences",
+      "name": "Absences du Mois",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 460],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const employees = $node['Liste Employés Actifs'].all();\nconst absences = $node['Absences du Mois'].all();\n\nconst absenceMap = {};\nfor (const abs of absences) {\n  const id = abs.json['ID Employé'];\n  if (!absenceMap[id]) absenceMap[id] = 0;\n  absenceMap[id] += parseFloat(abs.json['Jours Absence'] || 0);\n}\n\nconst currentMonth = new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });\n\nreturn employees.map(emp => {\n  const e = emp.json;\n  const salaireBase = parseFloat(e['Salaire Brut'] || 0);\n  const joursAbsence = absenceMap[e['ID']] || 0;\n  const joursOuvres = 22; // Jours ouvrés moyens par mois\n  \n  // Calcul déductions absences injustifiées\n  const deductionAbsence = (salaireBase / joursOuvres) * joursAbsence;\n  \n  // Primes\n  const prime = parseFloat(e['Prime Mois'] || 0);\n  \n  // Charges sociales (approximation française)\n  const salaireAjuste = salaireBase - deductionAbsence + prime;\n  const chargesSalariales = salaireAjuste * 0.228; // ~22.8% charges salariales\n  const salaireNet = salaireAjuste - chargesSalariales;\n  \n  // CSG/CRDS\n  const csgCrds = salaireAjuste * 0.097;\n  const salaireNetImposable = salaireNet - csgCrds;\n  \n  return {\n    json: {\n      id: e['ID'],\n      nom: e['Nom'],\n      prenom: e['Prénom'],\n      email: e['Email'],\n      poste: e['Poste'],\n      salaireBase: salaireBase.toFixed(2),\n      joursAbsence,\n      deductionAbsence: deductionAbsence.toFixed(2),\n      prime: prime.toFixed(2),\n      salaireAjuste: salaireAjuste.toFixed(2),\n      chargesSalariales: chargesSalariales.toFixed(2),\n      csgCrds: csgCrds.toFixed(2),\n      salaireNet: salaireNet.toFixed(2),\n      salaireNetImposable: salaireNetImposable.toFixed(2),\n      mois: currentMonth,\n      datePaiement: new Date(new Date().getFullYear(), new Date().getMonth(), 28).toLocaleDateString('fr-FR')\n    }\n  };\n});"
+      },
+      "id": "calculate-payroll",
+      "name": "Calculer Paies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emp = $input.first().json;\n\nconst html = `<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n  body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }\n  .header { background: #1e40af; color: white; padding: 20px; border-radius: 8px 8px 0 0; }\n  .section { border: 1px solid #e5e7eb; padding: 16px; margin: 8px 0; }\n  .row { display: flex; justify-content: space-between; padding: 4px 0; }\n  .total { background: #f3f4f6; font-weight: bold; font-size: 1.1em; }\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h2>Bulletin de Paie - ${emp.mois}</h2>\n  <p>${emp.prenom} ${emp.nom} | ${emp.poste}</p>\n</div>\n<div class=\"section\">\n  <h3>Rémunération Brute</h3>\n  <div class=\"row\"><span>Salaire de base</span><span>${emp.salaireBase} €</span></div>\n  ${emp.joursAbsence > 0 ? `<div class=\"row\"><span>Déduction absences (${emp.joursAbsence}j)</span><span>-${emp.deductionAbsence} €</span></div>` : ''}\n  ${parseFloat(emp.prime) > 0 ? `<div class=\"row\"><span>Prime</span><span>+${emp.prime} €</span></div>` : ''}\n  <div class=\"row total\"><span>Salaire brut ajusté</span><span>${emp.salaireAjuste} €</span></div>\n</div>\n<div class=\"section\">\n  <h3>Cotisations Sociales</h3>\n  <div class=\"row\"><span>Charges salariales (~22.8%)</span><span>-${emp.chargesSalariales} €</span></div>\n  <div class=\"row\"><span>CSG/CRDS (9.7%)</span><span>-${emp.csgCrds} €</span></div>\n</div>\n<div class=\"section total\">\n  <div class=\"row\"><span>SALAIRE NET À PAYER</span><span>${emp.salaireNet} €</span></div>\n  <div class=\"row\"><span>Date de paiement</span><span>${emp.datePaiement}</span></div>\n</div>\n<p style=\"font-size:0.8em;color:#6b7280;margin-top:20px;\">Document généré automatiquement. Pour toute question, contactez le service RH.</p>\n</body>\n</html>`;\n\nreturn [{ json: { ...emp, fichePaieHtml: html } }];"
+      },
+      "id": "generate-payslip",
+      "name": "Générer Fiche de Paie",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 380]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.email }}\", \"name\": \"{{ $json.prenom }} {{ $json.nom }}\"}]}], \"from\": {\"email\": \"{{$vars.RH_EMAIL}}\", \"name\": \"Service Paie\"}, \"subject\": \"Votre bulletin de paie {{ $json.mois }}\", \"content\": [{\"type\": \"text/html\", \"value\": \"{{ $json.fichePaieHtml }}\"}]}"
+      },
+      "id": "send-payslip",
+      "name": "Envoyer Fiche de Paie",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 380]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_PAIE}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Historique_Paie", "__rl": true, "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ID Employé": "={{ $json.id }}",
+            "Nom": "={{ $json.nom }}",
+            "Prénom": "={{ $json.prenom }}",
+            "Mois": "={{ $json.mois }}",
+            "Salaire Brut": "={{ $json.salaireBase }}",
+            "Salaire Net": "={{ $json.salaireNet }}",
+            "Date Envoi": "={{ new Date().toISOString().split('T')[0] }}"
+          }
+        }
+      },
+      "id": "log-payroll",
+      "name": "Historique Paie",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1640, 380],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    }
+  ],
+  "connections": {
+    "25 du Mois 8h": { "main": [[{ "node": "Liste Employés Actifs", "type": "main", "index": 0 }, { "node": "Absences du Mois", "type": "main", "index": 0 }]] },
+    "Liste Employés Actifs": { "main": [[{ "node": "Calculer Paies", "type": "main", "index": 0 }]] },
+    "Absences du Mois": { "main": [[{ "node": "Calculer Paies", "type": "main", "index": 0 }]] },
+    "Calculer Paies": { "main": [[{ "node": "Générer Fiche de Paie", "type": "main", "index": 0 }]] },
+    "Générer Fiche de Paie": { "main": [[{ "node": "Envoyer Fiche de Paie", "type": "main", "index": 0 }]] },
+    "Envoyer Fiche de Paie": { "main": [[{ "node": "Historique Paie", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "paie" }, { "name": "admin" }]
 }
