@@ -1,0 +1,190 @@
+{
+  "name": "Analyse sentimentale clients et prévention du churn",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1-5" }] }
+      },
+      "id": "a2b3c4d5-0001",
+      "name": "Déclencheur quotidien - 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.intercom.io/conversations?state=all&per_page=100&created_at_after={{ Math.floor((Date.now() - 7*24*60*60*1000)/1000) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.INTERCOM_API_KEY }}" },
+            { "name": "Accept", "value": "application/json" }
+          ]
+        }
+      },
+      "id": "a2b3c4d5-0002",
+      "name": "Intercom - Tickets et messages 7 derniers jours",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.mixpanel.com/api/2.0/engage",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Basic {{ $vars.MIXPANEL_SECRET }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "where", "value": "=properties[\"$last_seen\"] < \"{{ new Date(Date.now() - 10*24*60*60*1000).toISOString() }}\"" },
+            { "name": "output_properties", "value": "=[\"$email\",\"$name\",\"$last_seen\",\"$created\",\"Plan\"]" }
+          ]
+        }
+      },
+      "id": "a2b3c4d5-0003",
+      "name": "Mixpanel - Utilisateurs inactifs 10+ jours",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const conversations = $('Intercom - Tickets et messages 7 derniers jours').first().json?.conversations || [];\nconst inactiveUsers = $('Mixpanel - Utilisateurs inactifs 10+ jours').first().json?.results || [];\n\n// Grouper conversations par client\nconst clientMap = {};\n\nfor (const conv of conversations) {\n  const email = conv.contacts?.contacts?.[0]?.email || 'unknown';\n  if (!clientMap[email]) {\n    clientMap[email] = {\n      email,\n      name: conv.contacts?.contacts?.[0]?.name || email,\n      conversations: [],\n      ticket_count: 0,\n      unresolved_tickets: 0\n    };\n  }\n  clientMap[email].conversations.push({\n    id: conv.id,\n    subject: conv.source?.subject || '',\n    body: conv.source?.body?.substring(0, 500) || '',\n    created_at: conv.created_at,\n    state: conv.state\n  });\n  clientMap[email].ticket_count++;\n  if (conv.state !== 'closed') clientMap[email].unresolved_tickets++;\n}\n\n// Ajouter signaux d'inactivité\nfor (const user of inactiveUsers) {\n  const email = user.$email;\n  if (!clientMap[email]) {\n    clientMap[email] = {\n      email,\n      name: user.$name || email,\n      conversations: [],\n      ticket_count: 0,\n      unresolved_tickets: 0\n    };\n  }\n  clientMap[email].last_seen = user.$last_seen;\n  clientMap[email].inactive_days = Math.floor((Date.now() - new Date(user.$last_seen).getTime()) / (1000*60*60*24));\n  clientMap[email].plan = user.Plan;\n}\n\nconst clientsToAnalyze = Object.values(clientMap).filter(c => \n  c.ticket_count >= 2 || c.unresolved_tickets >= 1 || c.inactive_days >= 10\n);\n\nreturn clientsToAnalyze.map(c => ({ json: c }));"
+      },
+      "id": "a2b3c4d5-0004",
+      "name": "Agrégation signaux par client",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en Customer Success et analyse de sentiment. Tu analyses les interactions client pour détecter les risques de churn et calculer un health score."
+            },
+            {
+              "role": "user",
+              "content": "=Analyse ce client et calcule son health score :\n\nClient : {{ $json.name }} ({{ $json.email }})\nPlan : {{ $json.plan || 'N/A' }}\nInactivité : {{ $json.inactive_days || 0 }} jours\nTickets 7 jours : {{ $json.ticket_count }}\nTickets non résolus : {{ $json.unresolved_tickets }}\n\nDerniers tickets/messages :\n{{ $json.conversations.map(c => `[${c.state}] ${c.subject}: ${c.body}`).join('\\n---\\n').substring(0, 2000) }}\n\nRetourne un JSON :\n{\n  \"health_score\": 0-100,\n  \"churn_risk\": \"LOW\" | \"MEDIUM\" | \"HIGH\" | \"CRITICAL\",\n  \"sentiment\": \"positif\" | \"neutre\" | \"négatif\" | \"frustré\",\n  \"main_issues\": [\"Problème identifié 1\", \"Problème 2\"],\n  \"recommended_action\": \"Action CSM spécifique à effectuer dans les X heures\",\n  \"csm_message_draft\": \"Ébauche de message à envoyer au client\",\n  \"intervention_urgency\": \"immédiate\" | \"24h\" | \"48h\" | \"1 semaine\"\n}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.3 }
+      },
+      "id": "a2b3c4d5-0005",
+      "name": "GPT-4 - Analyse sentiment et health score",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const client = $('Agrégation signaux par client').first().json;\nlet analysis;\ntry {\n  const raw = $input.first().json.message.content;\n  analysis = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  analysis = { health_score: 50, churn_risk: 'MEDIUM', sentiment: 'neutre', recommended_action: 'Analyser manuellement', intervention_urgency: '24h' };\n}\n\nreturn [{\n  json: {\n    ...client,\n    health_score: analysis.health_score,\n    churn_risk: analysis.churn_risk,\n    sentiment: analysis.sentiment,\n    main_issues: analysis.main_issues || [],\n    recommended_action: analysis.recommended_action,\n    csm_message_draft: analysis.csm_message_draft,\n    intervention_urgency: analysis.intervention_urgency,\n    needs_immediate_action: ['HIGH', 'CRITICAL'].includes(analysis.churn_risk),\n    analyzed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a2b3c4d5-0006",
+      "name": "Enrichissement avec health score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ $json.needs_immediate_action }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "a2b3c4d5-0007",
+      "name": "Risque élevé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.churn_risk === 'CRITICAL' ? '🚨' : '⚠️' }} *Alerte Churn - {{ $json.churn_risk }}*\n\n*Client :* {{ $json.name }} ({{ $json.email }})\n*Plan :* {{ $json.plan }}\n*Health Score :* {{ $json.health_score }}/100\n*Sentiment :* {{ $json.sentiment }}\n*Inactivité :* {{ $json.inactive_days || 0 }} jours\n\n*Problèmes :* {{ $json.main_issues.join(' | ') }}\n\n*Action requise :* {{ $json.recommended_action }}\n*Urgence :* {{ $json.intervention_urgency }}\n\n*Brouillon message :*\n{{ $json.csm_message_draft }}"
+            }
+          ]
+        }
+      },
+      "id": "a2b3c4d5-0008",
+      "name": "Slack - Alerte CSM urgent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{ $vars.GOOGLE_SHEET_CHURN_ID }}" },
+        "sheetName": "Health Scores",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.format('dd/MM/yyyy') }}",
+            "Client": "={{ $json.name }}",
+            "Email": "={{ $json.email }}",
+            "Health Score": "={{ $json.health_score }}",
+            "Risque Churn": "={{ $json.churn_risk }}",
+            "Sentiment": "={{ $json.sentiment }}",
+            "Inactivité (jours)": "={{ $json.inactive_days || 0 }}",
+            "Tickets": "={{ $json.ticket_count }}",
+            "Action recommandée": "={{ $json.recommended_action }}"
+          }
+        }
+      },
+      "id": "a2b3c4d5-0009",
+      "name": "Google Sheets - Historique health scores",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1440, 400],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "1", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "content": "## 📉 Analyse Sentimentale & Prévention Churn\n\n**Objectif :** Analyse quotidienne des interactions clients (tickets, usage produit) pour détecter les signaux de churn et alerter les CSMs avec actions recommandées.\n\n**Déclencheur :** Chaque jour à 8h\n\n**Sources :**\n- Intercom : tickets/messages des 7 derniers jours\n- Mixpanel : utilisateurs inactifs 10+ jours\n\n**Scoring :**\n- Health Score 0-100\n- CRITICAL : action immédiate\n- HIGH : intervention < 24h\n- MEDIUM : surveillance\n- LOW : OK\n\n**Variables requises :**\n- INTERCOM_API_KEY\n- MIXPANEL_SECRET\n- OPENAI_API_KEY\n- SLACK_WEBHOOK_URL\n- GOOGLE_SHEET_CHURN_ID",
+        "height": 320,
+        "width": 380
+      },
+      "id": "a2b3c4d5-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Déclencheur quotidien - 8h": { "main": [[{ "node": "Intercom - Tickets et messages 7 derniers jours", "type": "main", "index": 0 }, { "node": "Mixpanel - Utilisateurs inactifs 10+ jours", "type": "main", "index": 0 }]] },
+    "Intercom - Tickets et messages 7 derniers jours": { "main": [[{ "node": "Agrégation signaux par client", "type": "main", "index": 0 }]] },
+    "Mixpanel - Utilisateurs inactifs 10+ jours": { "main": [[{ "node": "Agrégation signaux par client", "type": "main", "index": 0 }]] },
+    "Agrégation signaux par client": { "main": [[{ "node": "GPT-4 - Analyse sentiment et health score", "type": "main", "index": 0 }]] },
+    "GPT-4 - Analyse sentiment et health score": { "main": [[{ "node": "Enrichissement avec health score", "type": "main", "index": 0 }]] },
+    "Enrichissement avec health score": { "main": [[{ "node": "Risque élevé ?", "type": "main", "index": 0 }]] },
+    "Risque élevé ?": {
+      "main": [
+        [{ "node": "Slack - Alerte CSM urgent", "type": "main", "index": 0 }],
+        [{ "node": "Google Sheets - Historique health scores", "type": "main", "index": 0 }]
+      ]
+    },
+    "Slack - Alerte CSM urgent": { "main": [[{ "node": "Google Sheets - Historique health scores", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "churn" }, { "name": "customer-success" }]
+}
