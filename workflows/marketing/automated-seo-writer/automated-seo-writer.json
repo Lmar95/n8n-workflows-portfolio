@@ -1,0 +1,226 @@
+{
+  "name": "Rédaction Articles SEO Automatisée avec Analyse Sémantique",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ✍️ Rédaction Articles SEO Automatisée\n\n**Objectif :** À partir d'un mot-clé, analyser les top 10 Google, extraire le champ sémantique et générer un article 1500-2500 mots optimisé SEO avec images DALL-E. Publication automatique sur WordPress.\n\n**Déclenchement :** Webhook (POST) avec `{\"keyword\": \"votre mot-clé cible\", \"publish\": true}`\n\n**Configuration requise :**\n- OpenAI API Key (GPT-4 + DALL-E 3)\n- DataforSEO API credentials\n- Apify API Token (`$vars.APIFY_TOKEN`)\n- WordPress site URL + credentials\n- `$vars.WORDPRESS_URL`, `$vars.WORDPRESS_USER`, `$vars.WORDPRESS_APP_PASSWORD`",
+        "height": 300,
+        "width": 480
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "seo-article-generator",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "🌐 Webhook - Mot-Clé Cible",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and prepare keyword\nconst body = $input.first().json.body || $input.first().json;\nconst keyword = body.keyword || body.query || '';\nconst shouldPublish = body.publish !== false;\n\nif (!keyword) {\n  throw new Error('Keyword is required. Send POST with {\"keyword\": \"your keyword\"}');\n}\n\nreturn [{\n  json: {\n    keyword: keyword.toLowerCase().trim(),\n    originalKeyword: keyword,\n    shouldPublish,\n    language: body.language || 'fr',\n    targetLength: body.targetLength || 2000,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-input",
+      "name": "✅ Valider et Préparer Données",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.dataforseo.com/v3/serp/google/organic/live/advanced",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=[{\"keyword\": \"{{ $json.keyword }}\",\"language_code\": \"fr\",\"location_code\": 2250,\"device\": \"desktop\",\"depth\": 10}]"
+      },
+      "id": "serp-analysis",
+      "name": "🔎 Analyser Top 10 Google (DataforSEO)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.dataforseo.com/v3/keywords_data/google/search_volume/live",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=[{\"keywords\": [\"{{ $json.keyword }}\"],\"language_code\": \"fr\",\"location_code\": 2250}]"
+      },
+      "id": "keyword-data",
+      "name": "📊 Volume & Difficulté Mot-Clé",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and analyze SERP data to build semantic field\nconst serpData = $('🔎 Analyser Top 10 Google (DataforSEO)').item.json;\nconst kwData = $('📊 Volume & Difficulté Mot-Clé').item.json;\nconst keyword = $('✅ Valider et Préparer Données').item.json.keyword;\n\n// Extract top results\nconst results = serpData.tasks?.[0]?.result?.[0]?.items || [];\nconst organicResults = results.filter(r => r.type === 'organic').slice(0, 10);\n\n// Build content structure analysis\nconst competitorInsights = organicResults.map((r, i) => ({\n  position: i + 1,\n  title: r.title || '',\n  description: r.description || '',\n  url: r.url || '',\n  wordCountEstimate: Math.round((r.description?.length || 0) * 10)\n}));\n\n// Extract PAA questions\nconst paaItems = results.filter(r => r.type === 'people_also_ask');\nconst questions = paaItems.flatMap(p => (p.items || []).map(q => q.title)).slice(0, 8);\n\n// Keyword data\nconst kwResult = kwData.tasks?.[0]?.result?.[0];\nconst searchVolume = kwResult?.search_volume || 0;\nconst difficulty = kwResult?.keyword_properties?.keyword_difficulty || 0;\n\nreturn [{\n  json: {\n    keyword,\n    searchVolume,\n    difficulty,\n    competitorInsights,\n    questions,\n    topUrls: organicResults.slice(0, 5).map(r => r.url),\n    serpFeatures: [...new Set(results.map(r => r.type))].filter(t => t !== 'organic')\n  }\n}];"
+      },
+      "id": "build-semantic",
+      "name": "⚙️ Construire Champ Sémantique",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert SEO et rédacteur web senior. Tu crées des contenus optimisés SEO qui se positionnent en première page de Google. Tu rédiges en français avec un style engageant et expert."
+            },
+            {
+              "role": "user",
+              "content": "=Génère un article SEO complet sur le mot-clé: \"{{ $json.keyword }}\"\n\nContexte:\n- Volume de recherche: {{ $json.searchVolume }}/mois\n- Difficulté SEO: {{ $json.difficulty }}/100\n\nQuestions PAA à intégrer:\n{{ $json.questions.map((q, i) => (i+1) + '. ' + q).join('\\n') }}\n\nTop concurrents à battre:\n{{ $json.competitorInsights.slice(0, 5).map(c => c.position + '. ' + c.title).join('\\n') }}\n\nRédige un article de 1800-2200 mots avec:\n- Title tag H1 (60 chars max, inclut le mot-clé)\n- Introduction engageante avec le mot-clé dans les 100 premiers mots\n- Structure H2/H3 logique qui répond aux questions PAA\n- Champ sémantique enrichi (LSI keywords naturellement intégrés)\n- Exemples concrets et données chiffrées\n- Section FAQ (5 questions/réponses)\n- Conclusion avec CTA\n- Meta description (155 chars max)\n\nFormat JSON:\n{\n  \"metaTitle\": \"...\",\n  \"metaDescription\": \"...\",\n  \"slug\": \"url-slug-optimise\",\n  \"content\": \"contenu HTML complet avec balises h1, h2, h3, p, ul, strong...\",\n  \"imagePrompt\": \"prompt DALL-E pour image principale (en anglais)\",\n  \"tags\": [\"tag1\", \"tag2\"],\n  \"focusKeyphrase\": \"...\",\n  \"wordCount\": 0\n}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 4000,
+          "response_format": { "type": "json_object" }
+        }
+      },
+      "id": "generate-article",
+      "name": "✍️ Générer Article SEO (GPT-4)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the AI response\nconst aiResponse = $input.first().json;\nconst content = aiResponse.message?.content || aiResponse.choices?.[0]?.message?.content || '{}';\n\nlet article;\ntry {\n  article = JSON.parse(content);\n} catch(e) {\n  // Fallback if not JSON\n  article = {\n    metaTitle: $('✅ Valider et Préparer Données').item.json.keyword,\n    metaDescription: '',\n    slug: $('✅ Valider et Préparer Données').item.json.keyword.replace(/\\s+/g, '-'),\n    content: content,\n    imagePrompt: 'professional business article cover image',\n    tags: [],\n    wordCount: content.split(' ').length\n  };\n}\n\n// Count words\narticle.wordCount = article.content?.replace(/<[^>]+>/g, '').split(/\\s+/).length || 0;\n\nreturn [{ json: { ...article, keyword: $('✅ Valider et Préparer Données').item.json.keyword } }];"
+      },
+      "id": "parse-article",
+      "name": "📄 Parser Article Généré",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/images/generations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": \"dall-e-3\",\"prompt\": \"{{ $json.imagePrompt || 'Professional business article hero image, modern, clean design' }}, photorealistic, high quality, 16:9 ratio\",\"n\": 1,\"size\": \"1792x1024\",\"quality\": \"standard\"}"
+      },
+      "id": "generate-image",
+      "name": "🎨 Générer Image DALL-E 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $('✅ Valider et Préparer Données').item.json.shouldPublish }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-publish",
+      "name": "🚀 Publier sur WordPress?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2000, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.WORDPRESS_URL }}/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"title\": \"{{ $('📄 Parser Article Généré').item.json.metaTitle }}\",\n  \"content\": \"{{ $('📄 Parser Article Généré').item.json.content }}\",\n  \"status\": \"publish\",\n  \"slug\": \"{{ $('📄 Parser Article Généré').item.json.slug }}\",\n  \"excerpt\": \"{{ $('📄 Parser Article Généré').item.json.metaDescription }}\",\n  \"meta\": {\n    \"_yoast_wpseo_title\": \"{{ $('📄 Parser Article Généré').item.json.metaTitle }}\",\n    \"_yoast_wpseo_metadesc\": \"{{ $('📄 Parser Article Généré').item.json.metaDescription }}\",\n    \"_yoast_wpseo_focuskw\": \"{{ $('📄 Parser Article Généré').item.json.focusKeyphrase }}\"\n  },\n  \"tags\": {{ JSON.stringify($('📄 Parser Article Généré').item.json.tags) }}\n}"
+      },
+      "id": "publish-wordpress",
+      "name": "🌐 Publier sur WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 380]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"keyword\": \"{{ $('📄 Parser Article Généré').item.json.keyword }}\",\n  \"wordCount\": {{ $('📄 Parser Article Généré').item.json.wordCount }},\n  \"title\": \"{{ $('📄 Parser Article Généré').item.json.metaTitle }}\",\n  \"published\": {{ $('✅ Valider et Préparer Données').item.json.shouldPublish }},\n  \"wordpressUrl\": \"{{ $json.link || '' }}\",\n  \"metaDescription\": \"{{ $('📄 Parser Article Généré').item.json.metaDescription }}\"\n}"
+      },
+      "id": "respond-success",
+      "name": "✅ Répondre Succès",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2480, 340]
+    }
+  ],
+  "connections": {
+    "🌐 Webhook - Mot-Clé Cible": {
+      "main": [[{ "node": "✅ Valider et Préparer Données", "type": "main", "index": 0 }]]
+    },
+    "✅ Valider et Préparer Données": {
+      "main": [
+        [
+          { "node": "🔎 Analyser Top 10 Google (DataforSEO)", "type": "main", "index": 0 },
+          { "node": "📊 Volume & Difficulté Mot-Clé", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🔎 Analyser Top 10 Google (DataforSEO)": {
+      "main": [[{ "node": "⚙️ Construire Champ Sémantique", "type": "main", "index": 0 }]]
+    },
+    "📊 Volume & Difficulté Mot-Clé": {
+      "main": [[{ "node": "⚙️ Construire Champ Sémantique", "type": "main", "index": 1 }]]
+    },
+    "⚙️ Construire Champ Sémantique": {
+      "main": [[{ "node": "✍️ Générer Article SEO (GPT-4)", "type": "main", "index": 0 }]]
+    },
+    "✍️ Générer Article SEO (GPT-4)": {
+      "main": [[{ "node": "📄 Parser Article Généré", "type": "main", "index": 0 }]]
+    },
+    "📄 Parser Article Généré": {
+      "main": [
+        [
+          { "node": "🎨 Générer Image DALL-E 3", "type": "main", "index": 0 },
+          { "node": "🚀 Publier sur WordPress?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🚀 Publier sur WordPress?": {
+      "main": [
+        [{ "node": "🌐 Publier sur WordPress", "type": "main", "index": 0 }],
+        [{ "node": "✅ Répondre Succès", "type": "main", "index": 0 }]
+      ]
+    },
+    "🌐 Publier sur WordPress": {
+      "main": [[{ "node": "✅ Répondre Succès", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "seo" }, { "name": "content" }, { "name": "wordpress" }]
+}
