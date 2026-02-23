@@ -1,0 +1,232 @@
+{
+  "name": "Chatbot de pré-qualification des leads IA",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chatbot-qualification",
+        "options": {}
+      },
+      "id": "c1d2e3f4-0001",
+      "name": "Webhook - Message entrant visiteur",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst session_id = body.session_id || `SESS-${Date.now()}`;\nconst user_message = body.message || body.content;\nconst conversation_history = body.history || [];\nconst visitor_info = body.visitor_info || {};\n\nreturn [{\n  json: {\n    session_id,\n    user_message,\n    conversation_history,\n    visitor_info,\n    message_count: conversation_history.length,\n    is_new_session: conversation_history.length === 0,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "c1d2e3f4-0002",
+      "name": "Initialisation session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un assistant commercial intelligent pour qualifier des prospects B2B. Ton objectif est de qualifier naturellement le visiteur à travers une conversation fluide.\n\nRègle de qualification - tu dois collecter :\n1. Le besoin principal (quel problème cherchent-ils à résoudre ?)\n2. La timeline (quand souhaitent-ils commencer ?)\n3. Le budget indicatif (fourchette approximative)\n4. La taille de l'équipe / entreprise\n5. Le rôle du visiteur (décideur ou influenceur ?)\n\nScore de qualification :\n- QUALIFIE : besoin clair + budget > 5K€ + timeline < 6 mois + décideur\n- NURTURING : besoin présent mais budget ou timing pas aligné\n- NON_QUALIFIE : pas de projet concret ou hors cible\n\nRèles de conversation :\n- Pose UNE seule question à la fois\n- Sois naturel, amical, professionnel\n- Adapte le vocabulaire au secteur du prospect\n- Si besoin de 5-8 échanges maximum pour qualifier\n- Quand tu as assez d'infos, retourne un verdict JSON dans le champ 'qualification_result'\n\nFormat de réponse TOUJOURS en JSON :\n{\n  \"bot_message\": \"Ta réponse au visiteur\",\n  \"qualification_status\": \"IN_PROGRESS\" | \"QUALIFIE\" | \"NURTURING\" | \"NON_QUALIFIE\",\n  \"collected_data\": {\n    \"besoin\": null,\n    \"timeline\": null,\n    \"budget\": null,\n    \"taille_entreprise\": null,\n    \"role_visiteur\": null\n  },\n  \"suggested_resource\": null,\n  \"ready_for_booking\": false\n}"
+            },
+            {
+              "role": "user",
+              "content": "=Historique de conversation :\n{{ $json.conversation_history.length > 0 ? JSON.stringify($json.conversation_history) : 'Nouvelle conversation - aucun historique' }}\n\nNouveau message du visiteur : {{ $json.user_message }}\n\nInformations visiteur : {{ JSON.stringify($json.visitor_info) }}\nNombre d'échanges : {{ $json.message_count }}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.6 }
+      },
+      "id": "c1d2e3f4-0003",
+      "name": "GPT-4 - IA Chatbot conversationnel",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const session = $('Initialisation session').first().json;\nlet aiResponse;\ntry {\n  const raw = $input.first().json.message.content;\n  aiResponse = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  aiResponse = {\n    bot_message: 'Bonjour ! Comment puis-je vous aider aujourd\\'hui ?',\n    qualification_status: 'IN_PROGRESS',\n    collected_data: {},\n    ready_for_booking: false\n  };\n}\n\n// Mise à jour historique\nconst updated_history = [\n  ...session.conversation_history,\n  { role: 'user', content: session.user_message },\n  { role: 'assistant', content: aiResponse.bot_message }\n];\n\nreturn [{\n  json: {\n    session_id: session.session_id,\n    bot_message: aiResponse.bot_message,\n    qualification_status: aiResponse.qualification_status,\n    collected_data: aiResponse.collected_data || {},\n    suggested_resource: aiResponse.suggested_resource,\n    ready_for_booking: aiResponse.ready_for_booking || false,\n    updated_history,\n    visitor_info: session.visitor_info,\n    timestamp: session.timestamp\n  }\n}];"
+      },
+      "id": "c1d2e3f4-0004",
+      "name": "Parsing réponse IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.qualification_status }}",
+              "rightValue": "QUALIFIE",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "c1d2e3f4-0005",
+      "name": "Lead qualifié ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.calendly.com/scheduling_links",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.CALENDLY_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "max_event_count", "value": "=1" },
+            { "name": "owner", "value": "={{ $vars.CALENDLY_EVENT_TYPE_URI }}" },
+            { "name": "owner_type", "value": "=EventType" }
+          ]
+        }
+      },
+      "id": "c1d2e3f4-0006",
+      "name": "Calendly - Génération lien RDV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1240, 160]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "contact",
+        "operation": "create",
+        "additionalFields": {
+          "customPropertiesUi": {
+            "customPropertiesValues": [
+              { "property": "qualification_score", "value": "QUALIFIE" },
+              { "property": "besoin_identifie", "value": "={{ $('Parsing réponse IA').first().json.collected_data.besoin }}" },
+              { "property": "budget_indique", "value": "={{ $('Parsing réponse IA').first().json.collected_data.budget }}" },
+              { "property": "timeline_projet", "value": "={{ $('Parsing réponse IA').first().json.collected_data.timeline }}" },
+              { "property": "source_qualification", "value": "chatbot_site" }
+            ]
+          }
+        }
+      },
+      "id": "c1d2e3f4-0007",
+      "name": "HubSpot - Création contact qualifié",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [1440, 160],
+      "credentials": { "hubspotOAuth2Api": { "id": "1", "name": "HubSpot" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🔥 *Lead qualifié par le chatbot !*\n\n*Session :* {{ $('Parsing réponse IA').first().json.session_id }}\n*Besoin :* {{ $('Parsing réponse IA').first().json.collected_data.besoin }}\n*Budget :* {{ $('Parsing réponse IA').first().json.collected_data.budget }}\n*Timeline :* {{ $('Parsing réponse IA').first().json.collected_data.timeline }}\n*Taille entreprise :* {{ $('Parsing réponse IA').first().json.collected_data.taille_entreprise }}\n*Rôle :* {{ $('Parsing réponse IA').first().json.collected_data.role_visiteur }}\n\n🗓️ Lien RDV Calendly envoyé au prospect"
+            }
+          ]
+        }
+      },
+      "id": "c1d2e3f4-0008",
+      "name": "Slack - Alerte commercial lead chaud",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1640, 160]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond2",
+              "leftValue": "={{ $json.qualification_status }}",
+              "rightValue": "NURTURING",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "c1d2e3f4-0009",
+      "name": "Lead nurturing ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1240, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\n// Sélection de la ressource selon le besoin\nconst besoin = data.collected_data?.besoin?.toLowerCase() || '';\nlet resource_url = 'https://votre-site.com/ressources';\nlet resource_title = 'Notre guide complet';\n\nif (besoin.includes('prospect') || besoin.includes('lead')) {\n  resource_url = 'https://votre-site.com/guide-prospection';\n  resource_title = 'Guide : 10 stratégies de prospection B2B';\n} else if (besoin.includes('vente') || besoin.includes('closing')) {\n  resource_url = 'https://votre-site.com/techniques-closing';\n  resource_title = 'Ebook : Les techniques de closing des top performers';\n} else if (besoin.includes('crm') || besoin.includes('automatisation')) {\n  resource_url = 'https://votre-site.com/guide-crm';\n  resource_title = 'Checklist : Automatisation CRM en 7 étapes';\n}\n\nreturn [{\n  json: {\n    ...data,\n    nurturing_resource_url: resource_url,\n    nurturing_resource_title: resource_title,\n    added_to_nurturing: true\n  }\n}];"
+      },
+      "id": "c1d2e3f4-0010",
+      "name": "Sélection ressource nurturing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "const qualified = $('Parsing réponse IA').first().json;\nconst calendly = $('Calendly - Génération lien RDV').first()?.json;\nconst booking_link = calendly?.booking_url || 'https://calendly.com/votre-compte';\n\nreturn [{\n  json: {\n    session_id: qualified.session_id,\n    bot_message: qualified.bot_message + `\\n\\n🗓️ Réservez votre appel découverte : ${booking_link}`,\n    qualification_status: qualified.qualification_status,\n    updated_history: qualified.updated_history,\n    booking_link,\n    success: true\n  }\n}];"
+      },
+      "id": "c1d2e3f4-0011",
+      "name": "Prépare réponse avec lien RDV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 160]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ session_id: $json.session_id, bot_message: $json.bot_message, qualification_status: $json.qualification_status, history: $json.updated_history, ready_for_booking: $json.ready_for_booking || false, booking_link: $json.booking_link || null, nurturing_resource: $json.nurturing_resource_url || null }) }}"
+      },
+      "id": "c1d2e3f4-0012",
+      "name": "Réponse au chatbot frontend",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2040, 300]
+    },
+    {
+      "parameters": {
+        "content": "## 🤖 Chatbot de Pré-qualification des Leads IA\n\n**Objectif :** Qualifier automatiquement les visiteurs du site via une conversation IA naturelle (5-8 échanges). Si qualifié → lien Calendly. Si nurturing → ressource pertinente.\n\n**Déclencheur :** POST /webhook/chatbot-qualification\n\n**Payload :**\n```json\n{\n  \"session_id\": \"SESS-123\",\n  \"message\": \"Bonjour, je cherche à améliorer ma prospection\",\n  \"history\": [],\n  \"visitor_info\": {\"page\": \"/solutions\", \"source\": \"google\"}\n}\n```\n\n**Pipeline :**\n1. IA pose des questions de qualification (besoin, budget, timeline, rôle)\n2. Si QUALIFIÉ → génère lien Calendly + crée contact HubSpot + alerte Slack\n3. Si NURTURING → propose ressource adaptée + séquence email\n4. Retourne réponse bot + historique mis à jour\n\n**Variables requises :**\n- OPENAI_API_KEY\n- CALENDLY_API_KEY\n- CALENDLY_EVENT_TYPE_URI\n- SLACK_WEBHOOK_URL\n- HubSpot OAuth2",
+        "height": 400,
+        "width": 440
+      },
+      "id": "c1d2e3f4-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Webhook - Message entrant visiteur": { "main": [[{ "node": "Initialisation session", "type": "main", "index": 0 }]] },
+    "Initialisation session": { "main": [[{ "node": "GPT-4 - IA Chatbot conversationnel", "type": "main", "index": 0 }]] },
+    "GPT-4 - IA Chatbot conversationnel": { "main": [[{ "node": "Parsing réponse IA", "type": "main", "index": 0 }]] },
+    "Parsing réponse IA": { "main": [[{ "node": "Lead qualifié ?", "type": "main", "index": 0 }]] },
+    "Lead qualifié ?": {
+      "main": [
+        [{ "node": "Calendly - Génération lien RDV", "type": "main", "index": 0 }],
+        [{ "node": "Lead nurturing ?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Calendly - Génération lien RDV": { "main": [[{ "node": "HubSpot - Création contact qualifié", "type": "main", "index": 0 }]] },
+    "HubSpot - Création contact qualifié": { "main": [[{ "node": "Slack - Alerte commercial lead chaud", "type": "main", "index": 0 }]] },
+    "Slack - Alerte commercial lead chaud": { "main": [[{ "node": "Prépare réponse avec lien RDV", "type": "main", "index": 0 }]] },
+    "Prépare réponse avec lien RDV": { "main": [[{ "node": "Réponse au chatbot frontend", "type": "main", "index": 0 }]] },
+    "Lead nurturing ?": { "main": [[{ "node": "Sélection ressource nurturing", "type": "main", "index": 0 }]] },
+    "Sélection ressource nurturing": { "main": [[{ "node": "Réponse au chatbot frontend", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "chatbot" }, { "name": "qualification" }, { "name": "ia" }]
+}
