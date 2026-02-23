@@ -1,13 +1,151 @@
 {
-  "name": "Job Offer Generator",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["hr","recruiting","jobs","automation"],
-  "meta": {
-    "description": "Give the job title and a few bullet points on the ideal profile. Get a complete, SEO-optimized job posting: engaging company description, detailed missions, required profile, technical skills, soft skills, benefits, and recruitment process. 2–3 variants adapted to your employer brand tone.",
-    "difficulty": "⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Création Automatique Offres d'Emploi Multi-Plateformes",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📢 Création Automatique Offres d'Emploi\n\n**Objectif:** Générer des offres d'emploi optimisées et les publier automatiquement sur LinkedIn, Indeed, Welcome to the Jungle et votre site.\n\n**Déclencheurs:**\n- Webhook POST avec brief du poste\n- Nouveau record Notion/Airtable\n\n**Variables requises:**\n- OPENAI_API_KEY\n- LINKEDIN_ACCESS_TOKEN\n- NOTION_API_KEY\n- WORDPRESS_URL / WORDPRESS_AUTH",
+        "height": 260,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create-job-offer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Brief Poste",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "job-offer-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es expert RH et copywriter. Crée des offres d'emploi attractives et inclusives qui attirent les meilleurs talents.\"},{\"role\":\"user\",\"content\":\"Crée une offre d'emploi complète pour:\\n\\nPoste: \" + $json.poste + \"\\nEntreprise: \" + $json.entreprise + \"\\nSecteur: \" + ($json.secteur || 'Tech') + \"\\nExpérience requise: \" + ($json.experience || '3-5 ans') + \"\\nSalaire: \" + ($json.salaire || 'Selon profil') + \"\\nCompétences requises: \" + ($json.competences || '') + \"\\nAvantages: \" + ($json.avantages || 'À définir') + \"\\nRemote: \" + ($json.remote || 'Hybride') + \"\\n\\nRetourne un JSON avec:\\n- titre_poste: titre optimisé SEO\\n- resume: accroche 2 phrases\\n- description_entreprise: 100 mots\\n- missions: array 5-7 responsabilités\\n- profil_recherche: array 5-6 critères\\n- competences_techniques: array\\n- competences_soft: array\\n- conditions: salaire, lieu, remote, avantages\\n- process_recrutement: étapes\\n- linkedin_post: version courte pour LinkedIn (280 chars)\"}]"
+            },
+            { "name": "max_tokens", "value": "1500" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "generate-offer",
+      "name": "GPT-4 Génère Offre",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst brief = $node['Webhook Brief Poste'].first().json;\n\nlet offer;\ntry {\n  offer = JSON.parse(item.json.choices[0].message.content);\n} catch (e) {\n  throw new Error('Impossible de parser la réponse GPT-4');\n}\n\nconst jobHtml = `\n<div class=\"job-offer\">\n  <h1>${offer.titre_poste}</h1>\n  <p class=\"resume\">${offer.resume}</p>\n  \n  <h2>Notre entreprise</h2>\n  <p>${offer.description_entreprise}</p>\n  \n  <h2>Vos missions</h2>\n  <ul>${offer.missions?.map(m => `<li>${m}</li>`).join('') || ''}</ul>\n  \n  <h2>Profil recherché</h2>\n  <ul>${offer.profil_recherche?.map(p => `<li>${p}</li>`).join('') || ''}</ul>\n  \n  <h2>Compétences techniques</h2>\n  <ul>${offer.competences_techniques?.map(c => `<li>${c}</li>`).join('') || ''}</ul>\n  \n  <h2>Soft skills</h2>\n  <ul>${offer.competences_soft?.map(s => `<li>${s}</li>`).join('') || ''}</ul>\n  \n  <h2>Conditions</h2>\n  <p>${offer.conditions}</p>\n  \n  <h2>Processus de recrutement</h2>\n  <p>${offer.process_recrutement}</p>\n</div>\n`;\n\nreturn [{\n  json: {\n    ...brief,\n    offre: offer,\n    jobHtml,\n    linkedinPost: offer.linkedin_post,\n    titrePoste: offer.titre_poste,\n    dateCreation: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "format-offer",
+      "name": "Formater Offre",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.WORDPRESS_URL}}/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Basic {{$vars.WORDPRESS_AUTH}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"title\": \"{{ $json.titrePoste }}\", \"content\": \"{{ $json.jobHtml }}\", \"status\": \"publish\", \"categories\": [5]}"
+      },
+      "id": "publish-wordpress",
+      "name": "Publier WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 180]
+    },
+    {
+      "parameters": {
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.LINKEDIN_ACCESS_TOKEN}}" },
+            { "name": "X-Restli-Protocol-Version", "value": "2.0.0" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"author\": \"urn:li:organization:{{$vars.LINKEDIN_ORG_ID}}\", \"lifecycleState\": \"PUBLISHED\", \"specificContent\": {\"com.linkedin.ugc.ShareContent\": {\"shareCommentary\": {\"text\": \"{{ $json.linkedinPost }}\"}, \"shareMediaCategory\": \"NONE\"}}, \"visibility\": {\"com.linkedin.ugc.MemberNetworkVisibility\": \"PUBLIC\"}}"
+      },
+      "id": "publish-linkedin",
+      "name": "Publier LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 340]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.NOTION_API_KEY}}" },
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"parent\": {\"database_id\": \"{{$vars.NOTION_DB_OFFRES_ID}}\"}, \"properties\": {\"Titre\": {\"title\": [{\"text\": {\"content\": \"{{ $json.titrePoste }}\"}}]}, \"Statut\": {\"select\": {\"name\": \"Publiée\"}}, \"Date Création\": {\"date\": {\"start\": \"{{ $json.dateCreation }}\"}}, \"Entreprise\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $json.entreprise }}\"}}]}}}"
+      },
+      "id": "save-notion",
+      "name": "Sauvegarder Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"titre\": \"{{ $json.titrePoste }}\", \"plateformes\": [\"WordPress\", \"LinkedIn\", \"Notion\"]}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse Succès",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1400, 340]
+    }
+  ],
+  "connections": {
+    "Webhook Brief Poste": { "main": [[{ "node": "GPT-4 Génère Offre", "type": "main", "index": 0 }]] },
+    "GPT-4 Génère Offre": { "main": [[{ "node": "Formater Offre", "type": "main", "index": 0 }]] },
+    "Formater Offre": {
+      "main": [[
+        { "node": "Publier WordPress", "type": "main", "index": 0 },
+        { "node": "Publier LinkedIn", "type": "main", "index": 0 },
+        { "node": "Sauvegarder Notion", "type": "main", "index": 0 }
+      ]]
+    },
+    "Publier WordPress": { "main": [[{ "node": "Réponse Succès", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "recrutement" }, { "name": "offres-emploi" }]
 }
