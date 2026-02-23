@@ -1,0 +1,149 @@
+{
+  "name": "Audit E-commerce Automatisé et Rapport Optimisation",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🛒 Audit E-commerce Automatisé\n\n**Objectif:** Analyser automatiquement un site e-commerce et générer un rapport d'audit avec recommandations d'optimisation CRO.\n\n**Déclencheur:** Webhook avec URL du site à auditer\n\n**Variables requises:**\n- OPENAI_API_KEY\n- PAGESPEED_API_KEY (Google)\n- SENDGRID_API_KEY",
+        "height": 220,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ecommerce-audit",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook URL Site",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "ecommerce-audit-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "url", "value": "={{ $json.url }}" },
+            { "name": "strategy", "value": "mobile" },
+            { "name": "key", "value": "={{$vars.PAGESPEED_API_KEY}}" },
+            { "name": "category", "value": "performance" },
+            { "name": "category", "value": "accessibility" },
+            { "name": "category", "value": "seo" }
+          ]
+        }
+      },
+      "id": "pagespeed-mobile",
+      "name": "PageSpeed Mobile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "url", "value": "={{ $('Webhook URL Site').first().json.url }}" },
+            { "name": "strategy", "value": "desktop" },
+            { "name": "key", "value": "={{$vars.PAGESPEED_API_KEY}}" },
+            { "name": "category", "value": "performance" }
+          ]
+        }
+      },
+      "id": "pagespeed-desktop",
+      "name": "PageSpeed Desktop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mobileData = $node['PageSpeed Mobile'].first().json;\nconst desktopData = $node['PageSpeed Desktop'].first().json;\nconst formData = $node['Webhook URL Site'].first().json;\n\nconst mobileCats = mobileData.lighthouseResult?.categories || {};\nconst desktopCats = desktopData.lighthouseResult?.categories || {};\n\nconst mobileMetrics = mobileData.lighthouseResult?.audits || {};\nconst lcp = mobileMetrics['largest-contentful-paint']?.displayValue || 'N/A';\nconst fid = mobileMetrics['max-potential-fid']?.displayValue || 'N/A';\nconst cls = mobileMetrics['cumulative-layout-shift']?.displayValue || 'N/A';\nconst fcp = mobileMetrics['first-contentful-paint']?.displayValue || 'N/A';\nconst tbt = mobileMetrics['total-blocking-time']?.displayValue || 'N/A';\n\n// Opportunités d'amélioration\nconst opportunities = Object.values(mobileMetrics)\n  .filter(a => a.details?.type === 'opportunity' && a.score < 0.9)\n  .map(a => ({ titre: a.title, impact: a.displayValue, description: a.description }))\n  .slice(0, 5);\n\nreturn [{\n  json: {\n    ...formData,\n    mobileScore: Math.round((mobileCats.performance?.score || 0) * 100),\n    desktopScore: Math.round((desktopCats.performance?.score || 0) * 100),\n    accessibilityScore: Math.round((mobileCats.accessibility?.score || 0) * 100),\n    seoScore: Math.round((mobileCats.seo?.score || 0) * 100),\n    lcp,\n    fid,\n    cls,\n    fcp,\n    tbt,\n    opportunities: JSON.stringify(opportunities),\n    dateAudit: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "aggregate-metrics",
+      "name": "Agréger Métriques",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es expert CRO et e-commerce. Analyse ces métriques et génère des recommandations actionnables pour améliorer les conversions.\"},{\"role\":\"user\",\"content\":\"Audit e-commerce pour: \" + $json.url + \"\\n\\nScores PageSpeed:\\n- Mobile: \" + $json.mobileScore + \"/100\\n- Desktop: \" + $json.desktopScore + \"/100\\n- Accessibilité: \" + $json.accessibilityScore + \"/100\\n- SEO: \" + $json.seoScore + \"/100\\n\\nCore Web Vitals Mobile:\\n- LCP: \" + $json.lcp + \"\\n- FID: \" + $json.fid + \"\\n- CLS: \" + $json.cls + \"\\n- FCP: \" + $json.fcp + \"\\n\\nOpportunités détectées: \" + $json.opportunities + \"\\n\\nGénère un rapport d'audit avec:\\n1. Diagnostic global (note /20 et commentaire)\\n2. Top 3 problèmes critiques à corriger en priorité\\n3. 5 recommandations CRO pour améliorer les conversions\\n4. Plan d'action sur 30 jours (semaine par semaine)\\n5. Impact estimé sur le chiffre d'affaires si corrections appliquées\"}]"
+            },
+            { "name": "max_tokens", "value": "1200" }
+          ]
+        }
+      },
+      "id": "generate-report",
+      "name": "GPT-4 Génère Rapport",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $('Webhook URL Site').first().json.email }}\"}]}], \"from\": {\"email\": \"{{$vars.SALES_EMAIL}}\", \"name\": \"{{$vars.COMPANY_NAME}}\"}, \"subject\": \"Votre audit e-commerce - {{ $('Webhook URL Site').first().json.url }}\", \"content\": [{\"type\": \"text/html\", \"value\": \"<h1>Rapport d'Audit E-commerce</h1><h2>Scores</h2><table style='width:100%;border-collapse:collapse;'><tr><th style='padding:8px;background:#f3f4f6;'>Métrique</th><th>Score</th><th>Statut</th></tr><tr><td>Performance Mobile</td><td>{{ $('Agréger Métriques').first().json.mobileScore }}/100</td><td>{{ $('Agréger Métriques').first().json.mobileScore >= 90 ? '🟢' : $('Agréger Métriques').first().json.mobileScore >= 50 ? '🟡' : '🔴' }}</td></tr><tr><td>Performance Desktop</td><td>{{ $('Agréger Métriques').first().json.desktopScore }}/100</td><td>{{ $('Agréger Métriques').first().json.desktopScore >= 90 ? '🟢' : '🟡' }}</td></tr><tr><td>SEO Technique</td><td>{{ $('Agréger Métriques').first().json.seoScore }}/100</td><td>{{ $('Agréger Métriques').first().json.seoScore >= 90 ? '🟢' : '🟡' }}</td></tr></table><h2>Analyse et Recommandations</h2><pre style='background:#f9fafb;padding:16px;border-radius:8px;white-space:pre-wrap;'>{{ $json.choices[0].message.content }}</pre>\"}]}"
+      },
+      "id": "send-audit",
+      "name": "Envoyer Rapport Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"url\": \"{{ $('Webhook URL Site').first().json.url }}\", \"mobileScore\": {{ $('Agréger Métriques').first().json.mobileScore }}, \"message\": \"Rapport envoyé par email\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1640, 300]
+    }
+  ],
+  "connections": {
+    "Webhook URL Site": {
+      "main": [[
+        { "node": "PageSpeed Mobile", "type": "main", "index": 0 },
+        { "node": "PageSpeed Desktop", "type": "main", "index": 0 }
+      ]]
+    },
+    "PageSpeed Mobile": { "main": [[{ "node": "Agréger Métriques", "type": "main", "index": 0 }]] },
+    "PageSpeed Desktop": { "main": [[{ "node": "Agréger Métriques", "type": "main", "index": 0 }]] },
+    "Agréger Métriques": { "main": [[{ "node": "GPT-4 Génère Rapport", "type": "main", "index": 0 }]] },
+    "GPT-4 Génère Rapport": { "main": [[{ "node": "Envoyer Rapport Audit", "type": "main", "index": 0 }]] },
+    "Envoyer Rapport Audit": { "main": [[{ "node": "Réponse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "audit" }, { "name": "ecommerce" }]
+}
