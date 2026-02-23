@@ -1,0 +1,147 @@
+{
+  "name": "Création Automatique Contrats et Documents Légaux",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📄 Création Automatique Contrats\n\n**Objectif:** Générer des contrats professionnels (prestations, SaaS, CDI, NDA) personnalisés à partir de templates et les envoyer pour signature électronique.\n\n**Déclencheur:** Webhook POST avec données contrat ou deal HubSpot fermé\n\n**Variables requises:**\n- OPENAI_API_KEY\n- HUBSPOT_API_KEY\n- DOCUSIGN_API_KEY ou PANDADOC_API_KEY\n- SENDGRID_API_KEY\n- GOOGLE_SHEETS_ID_CONTRATS",
+        "height": 260,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create-contract",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Nouveau Contrat",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "create-contract-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\n// Générer référence contrat unique\nconst now = new Date();\nconst year = now.getFullYear();\nconst month = String(now.getMonth() + 1).padStart(2, '0');\nconst random = Math.floor(Math.random() * 9000 + 1000);\nconst reference = `CTRCT-${year}${month}-${random}`;\n\n// Dates\nconst dateDebut = data.date_debut || new Date().toLocaleDateString('fr-FR');\nconst dateFin = data.date_fin || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toLocaleDateString('fr-FR');\n\nreturn [{\n  json: {\n    ...data,\n    reference,\n    dateDebut,\n    dateFin,\n    dateCreation: new Date().toLocaleDateString('fr-FR'),\n    typeContrat: data.type_contrat || 'prestation_services'\n  }\n}];"
+      },
+      "id": "prepare-contract",
+      "name": "Préparer Données Contrat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es juriste spécialisé en droit des contrats français. Génère des contrats professionnels conformes au droit français.\"},{\"role\":\"user\",\"content\":\"Génère un contrat de type: \" + $json.typeContrat + \"\\n\\nParties:\\n- Prestataire: \" + ($json.prestataire_nom || 'Notre Société') + \", \" + ($json.prestataire_adresse || '') + \"\\n- Client: \" + $json.client_nom + \", \" + ($json.client_adresse || '') + \"\\n\\nObjet: \" + $json.objet + \"\\nMontant: \" + $json.montant + \" € HT\\nModalité paiement: \" + ($json.paiement || '30 jours') + \"\\nDurée: \" + $json.dateDebut + \" au \" + $json.dateFin + \"\\nConditions particulières: \" + ($json.conditions || '') + \"\\n\\nGénère un contrat complet avec:\\n1. Identification des parties\\n2. Objet et périmètre\\n3. Obligations de chaque partie\\n4. Conditions financières\\n5. Clause de confidentialité\\n6. Propriété intellectuelle\\n7. Résiliation\\n8. Loi applicable et juridiction\\n9. Signatures\\n\\nTon: professionnel et légal. Droit français applicable.\"}]"
+            },
+            { "name": "max_tokens", "value": "2500" }
+          ]
+        }
+      },
+      "id": "generate-contract",
+      "name": "GPT-4 Génère Contrat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst contractData = $node['Préparer Données Contrat'].first().json;\n\nconst contractText = response.choices[0].message.content;\n\n// Construire HTML du contrat\nconst contractHtml = `<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<style>\n  body { font-family: 'Times New Roman', serif; max-width: 800px; margin: 40px auto; padding: 40px; color: #1a1a1a; line-height: 1.6; }\n  .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 30px; }\n  .reference { color: #666; font-size: 0.9em; }\n  h1 { font-size: 1.8em; margin-bottom: 8px; }\n  h2 { font-size: 1.2em; margin-top: 24px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }\n  .parties { background: #f9fafb; padding: 16px; border-radius: 4px; margin: 20px 0; }\n  .signatures { margin-top: 60px; display: flex; justify-content: space-between; }\n  .signature-box { width: 45%; border-top: 1px solid #333; padding-top: 8px; }\n  .footer { margin-top: 40px; font-size: 0.8em; color: #666; text-align: center; border-top: 1px solid #ccc; padding-top: 12px; }\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h1>CONTRAT DE ${contractData.typeContrat.toUpperCase().replace(/_/g, ' ')}</h1>\n  <p class=\"reference\">Référence: ${contractData.reference} | Date: ${contractData.dateCreation}</p>\n</div>\n<div style=\"white-space: pre-wrap;\">${contractText}</div>\n<div class=\"signatures\">\n  <div class=\"signature-box\">\n    <p><strong>${contractData.prestataire_nom || 'Le Prestataire'}</strong></p>\n    <p>Date: _______________</p>\n    <p>Signature:</p>\n    <br><br>\n  </div>\n  <div class=\"signature-box\">\n    <p><strong>${contractData.client_nom}</strong></p>\n    <p>Date: _______________</p>\n    <p>Signature:</p>\n    <br><br>\n  </div>\n</div>\n<div class=\"footer\">Document généré le ${contractData.dateCreation} - Référence: ${contractData.reference}</div>\n</body>\n</html>`;\n\nreturn [{\n  json: {\n    ...contractData,\n    contractText,\n    contractHtml,\n    fileName: `contrat-${contractData.reference}.html`\n  }\n}];"
+      },
+      "id": "build-contract",
+      "name": "Construire Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.client_email }}\", \"name\": \"{{ $json.client_nom }}\"}]}], \"from\": {\"email\": \"{{$vars.ADMIN_EMAIL}}\", \"name\": \"{{$vars.COMPANY_NAME}}\"}, \"subject\": \"Contrat {{ $json.reference }} - À signer\", \"content\": [{\"type\": \"text/html\", \"value\": \"<p>Bonjour,</p><p>Veuillez trouver ci-dessous votre contrat référence <strong>{{ $json.reference }}</strong> pour signature.</p>{{ $json.contractHtml }}<p>Pour toute question, contactez-nous.</p><p>Cordialement,<br>{{$vars.COMPANY_NAME}}</p>\"}]}"
+      },
+      "id": "send-contract",
+      "name": "Envoyer Contrat Client",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_CONTRATS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Contrats", "__rl": true, "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Référence Contrat": "={{ $json.reference }}",
+            "Nom Client": "={{ $json.client_nom }}",
+            "Email Client": "={{ $json.client_email }}",
+            "Type Contrat": "={{ $json.typeContrat }}",
+            "Objet": "={{ $json.objet }}",
+            "Valeur Contrat": "={{ $json.montant }}",
+            "Date Début": "={{ $json.dateDebut }}",
+            "Date Échéance": "={{ $json.dateFin }}",
+            "Statut": "=Envoyé",
+            "Date Création": "={{ $json.dateCreation }}",
+            "Nb Relances": "=0"
+          }
+        }
+      },
+      "id": "log-contract",
+      "name": "Logger Contrat",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1400, 400],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"reference\": \"{{ $json.reference }}\", \"message\": \"Contrat créé et envoyé pour signature\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1640, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Nouveau Contrat": { "main": [[{ "node": "Préparer Données Contrat", "type": "main", "index": 0 }]] },
+    "Préparer Données Contrat": { "main": [[{ "node": "GPT-4 Génère Contrat", "type": "main", "index": 0 }]] },
+    "GPT-4 Génère Contrat": { "main": [[{ "node": "Construire Document", "type": "main", "index": 0 }]] },
+    "Construire Document": {
+      "main": [[
+        { "node": "Envoyer Contrat Client", "type": "main", "index": 0 },
+        { "node": "Logger Contrat", "type": "main", "index": 0 }
+      ]]
+    },
+    "Envoyer Contrat Client": { "main": [[{ "node": "Réponse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "admin" }, { "name": "contrats" }, { "name": "legal" }]
+}
