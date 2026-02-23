@@ -1,0 +1,147 @@
+{
+  "name": "Onboarding Automatisé Nouveaux Clients",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🚀 Onboarding Clients Automatisé\n\n**Objectif:** Orchestrer tout le processus d'onboarding client: création d'espace, invitation outils, envoi ressources, planification kick-off.\n\n**Déclencheur:** Deal HubSpot passé en 'Closed Won' ou webhook\n\n**Variables requises:**\n- HUBSPOT_API_KEY\n- NOTION_API_KEY\n- SENDGRID_API_KEY\n- SLACK_BOT_TOKEN\n- CALENDLY_API_KEY",
+        "height": 240,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-onboarding",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Deal Gagné",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "client-onboarding-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/deals/{{$json.dealId}}?properties=dealname,amount,closedate,hubspot_owner_id,hs_primary_contact_id",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.HUBSPOT_API_KEY}}" }]
+        }
+      },
+      "id": "get-deal",
+      "name": "Récupérer Deal HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.NOTION_API_KEY}}" },
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"parent\": {\"database_id\": \"{{$vars.NOTION_DB_CLIENTS_ID}}\"}, \"properties\": {\"Client\": {\"title\": [{\"text\": {\"content\": \"{{ $('Webhook Deal Gagné').first().json.client_nom }}\"}}]}, \"Statut\": {\"select\": {\"name\": \"Onboarding\"}}, \"Date Démarrage\": {\"date\": {\"start\": \"{{ new Date().toISOString().split('T')[0] }}\"}}, \"Montant\": {\"number\": {{ $json.properties.amount || 0 }}}, \"Commercial\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $('Webhook Deal Gagné').first().json.commercial || '' }}\"}}]}}, \"children\": [{\"object\": \"block\", \"type\": \"heading_2\", \"heading_2\": {\"rich_text\": [{\"text\": {\"content\": \"📋 Checklist Onboarding\"}}]}}, {\"object\": \"block\", \"type\": \"to_do\", \"to_do\": {\"rich_text\": [{\"text\": {\"content\": \"Kick-off call planifié\"}}], \"checked\": false}}, {\"object\": \"block\", \"type\": \"to_do\", \"to_do\": {\"rich_text\": [{\"text\": {\"content\": \"Accès outils configurés\"}}], \"checked\": false}}, {\"object\": \"block\", \"type\": \"to_do\", \"to_do\": {\"rich_text\": [{\"text\": {\"content\": \"Brief projet complété\"}}], \"checked\": false}}]}"
+      },
+      "id": "create-client-notion",
+      "name": "Créer Espace Client Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 160]
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/channels.create",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SLACK_BOT_TOKEN}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "name", "value": "=client-{{ $('Webhook Deal Gagné').first().json.client_nom.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 20) }}" },
+            { "name": "is_private", "value": false }
+          ]
+        }
+      },
+      "id": "create-slack-channel",
+      "name": "Créer Canal Slack Client",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $('Webhook Deal Gagné').first().json.client_email }}\", \"name\": \"{{ $('Webhook Deal Gagné').first().json.client_nom }}\"}]}], \"from\": {\"email\": \"{{$vars.CSM_EMAIL}}\", \"name\": \"{{$vars.COMPANY_NAME}} - Customer Success\"}, \"subject\": \"Bienvenue! Votre onboarding commence 🚀\", \"content\": [{\"type\": \"text/html\", \"value\": \"<h1>Bienvenue {{ $('Webhook Deal Gagné').first().json.client_prenom }} !</h1><p>Nous sommes ravis de vous compter parmi nos clients.</p><h2>Prochaines étapes</h2><ol><li><strong>Kick-off call</strong> - Planifiez notre premier échange: <a href='{{$vars.CALENDLY_URL}}'>Réserver un créneau</a></li><li><strong>Questionnaire d'onboarding</strong> - Pour que nous comprenions vos besoins: <a href='{{$vars.ONBOARDING_FORM_URL}}'>Remplir le questionnaire</a></li><li><strong>Accès à votre espace client</strong> - Nous vous enverrons vos accès sous 24h</li></ol><p>Une question ? Votre contact dédié: <a href='mailto:{{$vars.CSM_EMAIL}}'>{{$vars.CSM_NAME}}</a></p><p>À très bientôt !<br>{{$vars.CSM_NAME}}<br>{{$vars.COMPANY_NAME}}</p>\"}]}"
+      },
+      "id": "welcome-email",
+      "name": "Email Bienvenue Client",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 440]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🎉 *Nouveau client onboardé!*\n\n*Client:* {{ $('Webhook Deal Gagné').first().json.client_nom }}\n*Montant:* {{ $json.properties?.amount || '' }} €\n*Commercial:* {{ $('Webhook Deal Gagné').first().json.commercial || '' }}\n\n✅ Espace Notion créé\n✅ Canal Slack créé\n✅ Email bienvenue envoyé\n\n📅 À planifier: Kick-off call dans les 48h"
+            }
+          ]
+        }
+      },
+      "id": "notify-team",
+      "name": "Notifier Équipe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"client\": \"{{ $('Webhook Deal Gagné').first().json.client_nom }}\", \"actions\": [\"Notion créé\", \"Slack créé\", \"Email envoyé\", \"Équipe notifiée\"]}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1400, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Deal Gagné": { "main": [[{ "node": "Récupérer Deal HubSpot", "type": "main", "index": 0 }]] },
+    "Récupérer Deal HubSpot": {
+      "main": [[
+        { "node": "Créer Espace Client Notion", "type": "main", "index": 0 },
+        { "node": "Créer Canal Slack Client", "type": "main", "index": 0 },
+        { "node": "Email Bienvenue Client", "type": "main", "index": 0 }
+      ]]
+    },
+    "Créer Canal Slack Client": { "main": [[{ "node": "Notifier Équipe", "type": "main", "index": 0 }]] },
+    "Notifier Équipe": { "main": [[{ "node": "Réponse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "clients" }, { "name": "onboarding" }]
+}
