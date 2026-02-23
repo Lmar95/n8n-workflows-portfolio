@@ -1,0 +1,194 @@
+{
+  "name": "Synthèse automatique des réunions avec action items",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "synthese-reunion",
+        "options": {}
+      },
+      "id": "d1e2f3a4-0001",
+      "name": "Webhook - Fin de réunion",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 18 * * 1-5" }] }
+      },
+      "id": "d1e2f3a4-0001b",
+      "name": "Déclencheur - Vérification Fireflies 18h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 460]
+    },
+    {
+      "parameters": {
+        "url": "https://api.fireflies.ai/graphql",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.FIREFLIES_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={\n  \"query\": \"query { transcripts(limit: 5, skip: 0, user_id: \\\"me\\\") { id title date duration participants { displayName email } sentences { text speaker_name start_time } summary { keywords action_items outline overview } } }\"\n}"
+            }
+          ]
+        }
+      },
+      "id": "d1e2f3a4-0002",
+      "name": "Fireflies - Récupération transcription",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst webhookData = $('Webhook - Fin de réunion').first()?.json?.body;\n\n// Gestion source: webhook direct ou polling Fireflies\nlet transcript;\nif (webhookData?.transcript_id) {\n  // Sera récupéré par Fireflies\n  transcript = data.data?.transcripts?.[0];\n} else {\n  // Prend le plus récent non traité (créé aujourd'hui)\n  const today = new Date().toDateString();\n  transcript = data.data?.transcripts?.find(t => {\n    const tDate = new Date(t.date * 1000).toDateString();\n    return tDate === today;\n  });\n}\n\nif (!transcript) {\n  return [{ json: { skip: true, reason: 'Aucune réunion à traiter aujourd\\'hui' } }];\n}\n\n// Reconstruction du transcript complet\nconst full_transcript = transcript.sentences?.map(s => `${s.speaker_name}: ${s.text}`).join('\\n') || '';\n\nreturn [{\n  json: {\n    meeting_id: transcript.id,\n    meeting_title: transcript.title || 'Réunion sans titre',\n    meeting_date: transcript.date ? new Date(transcript.date * 1000).toISOString() : new Date().toISOString(),\n    duration_minutes: Math.round((transcript.duration || 0) / 60),\n    participants: transcript.participants || [],\n    participant_emails: transcript.participants?.map(p => p.email).filter(Boolean) || [],\n    full_transcript: full_transcript.substring(0, 12000),\n    existing_summary: transcript.summary || null,\n    skip: false\n  }\n}];"
+      },
+      "id": "d1e2f3a4-0003",
+      "name": "Extraction et normalisation transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ $json.skip }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "d1e2f3a4-0004",
+      "name": "Réunion à traiter ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [840, 400]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en prise de notes de réunion. Tu génères des compte-rendus clairs, structurés et actionnables. Tu es précis, synthétique et tu identifies clairement les responsables et délais."
+            },
+            {
+              "role": "user",
+              "content": "=Analyse cette réunion et génère un compte-rendu complet.\n\n**Réunion :** {{ $json.meeting_title }}\n**Date :** {{ $json.meeting_date }}\n**Durée :** {{ $json.duration_minutes }} minutes\n**Participants :** {{ $json.participants.map(p => p.displayName).join(', ') }}\n\n**Transcription :**\n{{ $json.full_transcript }}\n\nGénère un JSON structuré :\n{\n  \"executive_summary\": \"Résumé en 3-5 phrases clés\",\n  \"objectifs_reunion\": \"Objectif(s) de la réunion\",\n  \"sujets_abordes\": [{\"sujet\": \"...\", \"discussion\": \"...\", \"conclusion\": \"...\"}],\n  \"decisions_prises\": [\"Décision 1\", \"Décision 2\"],\n  \"action_items\": [\n    {\"tache\": \"...\", \"responsable\": \"Prénom Nom\", \"deadline\": \"JJ/MM/YYYY\", \"priorite\": \"haute/moyenne/basse\"}\n  ],\n  \"points_desaccord\": [\"Point de friction 1\"],\n  \"prochaine_reunion\": \"Date/heure suggérée si mentionnée\",\n  \"sentiment_general\": \"positif/neutre/tendu\"\n}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.3, "maxTokens": 3000 }
+      },
+      "id": "d1e2f3a4-0005",
+      "name": "GPT-4 - Analyse et synthèse IA",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const meetingData = $('Extraction et normalisation transcript').first().json;\nlet analysis;\ntry {\n  const raw = $input.first().json.message.content;\n  analysis = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  analysis = { executive_summary: 'Erreur analyse', action_items: [] };\n}\n\n// Formattage du compte-rendu email\nconst actionItemsHTML = analysis.action_items?.map(ai => \n  `<tr><td>${ai.tache}</td><td>${ai.responsable}</td><td>${ai.deadline}</td><td style=\"color:${ai.priorite==='haute'?'red':ai.priorite==='moyenne'?'orange':'green'}\">${ai.priorite}</td></tr>`\n).join('') || '';\n\nconst emailBody = `\n<h2>📋 Compte-rendu : ${meetingData.meeting_title}</h2>\n<p><strong>Date :</strong> ${new Date(meetingData.meeting_date).toLocaleDateString('fr-FR')}</p>\n<p><strong>Participants :</strong> ${meetingData.participants.map(p=>p.displayName).join(', ')}</p>\n<hr/>\n<h3>📌 Résumé exécutif</h3>\n<p>${analysis.executive_summary}</p>\n<h3>✅ Décisions prises</h3>\n<ul>${(analysis.decisions_prises||[]).map(d=>`<li>${d}</li>`).join('')}</ul>\n<h3>🎯 Actions à réaliser</h3>\n<table border=\"1\" cellpadding=\"8\" style=\"width:100%;border-collapse:collapse\">\n<tr style=\"background:#f0f0f0\"><th>Tâche</th><th>Responsable</th><th>Deadline</th><th>Priorité</th></tr>\n${actionItemsHTML}\n</table>\n${analysis.points_desaccord?.length > 0 ? `<h3>⚠️ Points de désaccord</h3><ul>${analysis.points_desaccord.map(p=>`<li>${p}</li>`).join('')}</ul>` : ''}\n`;\n\nreturn [{\n  json: {\n    ...meetingData,\n    analysis,\n    email_subject: `📋 CR - ${meetingData.meeting_title} - ${new Date(meetingData.meeting_date).toLocaleDateString('fr-FR')}`,\n    email_body: emailBody,\n    action_items_count: analysis.action_items?.length || 0\n  }\n}];"
+      },
+      "id": "d1e2f3a4-0006",
+      "name": "Formattage compte-rendu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "resource": "page",
+        "operation": "create",
+        "databaseId": "={{ $vars.NOTION_MEETINGS_DB_ID }}",
+        "title": "={{ $json.meeting_title }} - {{ $now.format('dd/MM/yyyy') }}",
+        "blockUi": {
+          "blockValues": [
+            { "type": "heading_2", "textContent": "📌 Résumé exécutif" },
+            { "type": "paragraph", "textContent": "={{ $json.analysis.executive_summary }}" },
+            { "type": "heading_2", "textContent": "✅ Décisions prises" },
+            { "type": "paragraph", "textContent": "={{ $json.analysis.decisions_prises?.join('\\n• ') }}" },
+            { "type": "heading_2", "textContent": "🎯 Action Items" },
+            { "type": "paragraph", "textContent": "={{ $json.analysis.action_items?.map(ai => `• ${ai.tache} → ${ai.responsable} (${ai.deadline})`).join('\\n') }}" }
+          ]
+        }
+      },
+      "id": "d1e2f3a4-0007",
+      "name": "Notion - Sauvegarde compte-rendu",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1440, 200],
+      "credentials": { "notionApi": { "id": "1", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "reunions@votre-entreprise.com",
+        "toEmail": "={{ $json.participant_emails.join(',') }}",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "html",
+        "message": "={{ $json.email_body }}"
+      },
+      "id": "d1e2f3a4-0008",
+      "name": "Email - Envoi CR aux participants",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1440, 350],
+      "credentials": { "smtp": { "id": "1", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=📋 *Compte-rendu généré - {{ $json.meeting_title }}*\n\n{{ $json.analysis.executive_summary }}\n\n*{{ $json.action_items_count }} action items* assignés\n*Participants :* {{ $json.participants.map(p => p.displayName).join(', ') }}\n\n✅ CR envoyé par email et sauvegardé dans Notion"
+            }
+          ]
+        }
+      },
+      "id": "d1e2f3a4-0009",
+      "name": "Slack - Notification CR prêt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1440, 500]
+    },
+    {
+      "parameters": {
+        "content": "## 📋 Synthèse Automatique des Réunions\n\n**Objectif :** Transcription Fireflies → GPT-4 analyse → CR structuré avec action items → envoi email aux participants + Notion.\n\n**Déclencheurs :**\n- Webhook POST /webhook/synthese-reunion (depuis Fireflies)\n- Schedule quotidien à 18h (batch)\n\n**Pipeline :**\n1. Récupère la dernière transcription Fireflies\n2. GPT-4 génère : résumé, décisions, action items avec responsable+deadline, points de désaccord\n3. Sauvegarde dans Notion\n4. Email HTML à tous les participants\n5. Notification Slack\n\n**Variables requises :**\n- FIREFLIES_API_KEY\n- OPENAI_API_KEY\n- NOTION_MEETINGS_DB_ID\n- SLACK_WEBHOOK_URL\n- SMTP credentials",
+        "height": 340,
+        "width": 400
+      },
+      "id": "d1e2f3a4-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Webhook - Fin de réunion": { "main": [[{ "node": "Fireflies - Récupération transcription", "type": "main", "index": 0 }]] },
+    "Déclencheur - Vérification Fireflies 18h": { "main": [[{ "node": "Fireflies - Récupération transcription", "type": "main", "index": 0 }]] },
+    "Fireflies - Récupération transcription": { "main": [[{ "node": "Extraction et normalisation transcript", "type": "main", "index": 0 }]] },
+    "Extraction et normalisation transcript": { "main": [[{ "node": "Réunion à traiter ?", "type": "main", "index": 0 }]] },
+    "Réunion à traiter ?": { "main": [[{ "node": "GPT-4 - Analyse et synthèse IA", "type": "main", "index": 0 }]] },
+    "GPT-4 - Analyse et synthèse IA": { "main": [[{ "node": "Formattage compte-rendu", "type": "main", "index": 0 }]] },
+    "Formattage compte-rendu": { "main": [[{ "node": "Notion - Sauvegarde compte-rendu", "type": "main", "index": 0 }, { "node": "Email - Envoi CR aux participants", "type": "main", "index": 0 }, { "node": "Slack - Notification CR prêt", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "reunions" }, { "name": "ia" }]
+}
