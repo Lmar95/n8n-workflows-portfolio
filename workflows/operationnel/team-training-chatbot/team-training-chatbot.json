@@ -1,0 +1,224 @@
+{
+  "name": "Chatbot de formation des équipes - Base de connaissance IA",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chatbot-formation",
+        "options": {}
+      },
+      "id": "e1f2a3b4-0001",
+      "name": "Webhook - Question collaborateur",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nreturn [{\n  json: {\n    session_id: body.session_id || `KB-${Date.now()}`,\n    user_id: body.user_id || body.slack_user_id,\n    user_name: body.user_name || 'Collaborateur',\n    question: body.question || body.text,\n    channel: body.channel || 'web',\n    history: body.history || [],\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "e1f2a3b4-0002",
+      "name": "Extraction de la question",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.pinecone.io/query",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Api-Key", "value": "={{ $vars.PINECONE_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "body",
+              "value": "={\"namespace\": \"knowledge-base\", \"topK\": 5, \"includeMetadata\": true, \"vector\": []}"
+            }
+          ]
+        }
+      },
+      "id": "e1f2a3b4-0003",
+      "name": "Pinecone - Recherche sémantique docs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [640, 180]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/search",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.NOTION_API_KEY }}" },
+            { "name": "Notion-Version", "value": "2022-06-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "query", "value": "={{ $('Extraction de la question').first().json.question }}" },
+            { "name": "filter", "value": "={\"value\": \"page\", \"property\": \"object\"}" }
+          ]
+        }
+      },
+      "id": "e1f2a3b4-0004",
+      "name": "Notion - Recherche dans base de connaissance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [640, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = $('Extraction de la question').first().json;\nconst notionResults = $('Notion - Recherche dans base de connaissance').first().json;\n\n// Extraction du contenu pertinent des pages Notion\nconst relevantDocs = (notionResults.results || []).slice(0, 4).map(page => {\n  const title = page.properties?.title?.title?.[0]?.plain_text || page.properties?.Name?.title?.[0]?.plain_text || 'Document';\n  const url = page.url;\n  return { title, url, page_id: page.id };\n});\n\nconst context = relevantDocs.map(d => `- ${d.title} (${d.url})`).join('\\n');\n\nreturn [{\n  json: {\n    ...question,\n    relevant_docs: relevantDocs,\n    context_sources: context,\n    sources_found: relevantDocs.length\n  }\n}];"
+      },
+      "id": "e1f2a3b4-0005",
+      "name": "Fusion des sources de connaissance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es l'assistant de formation interne de l'entreprise. Tu as accès à la base de connaissance (SOPs, processus, playbooks, guides). Tu réponds aux questions des collaborateurs avec précision, en citant tes sources. Si tu ne trouves pas la réponse dans la base de connaissance, dis-le clairement et propose d'escalader vers un manager. Tu es pédagogue, clair et concis."
+            },
+            {
+              "role": "user",
+              "content": "=Question de {{ $json.user_name }} : {{ $json.question }}\n\nDocuments potentiellement pertinents trouvés dans la base de connaissance :\n{{ $json.context_sources || 'Aucun document trouvé directement' }}\n\nHistorique de la conversation :\n{{ $json.history.length > 0 ? JSON.stringify($json.history) : 'Nouvelle conversation' }}\n\nRéponds à la question en JSON :\n{\n  \"answer\": \"Ta réponse complète et précise\",\n  \"sources_used\": [\"Titre doc 1\", \"Titre doc 2\"],\n  \"confidence\": \"high\" | \"medium\" | \"low\",\n  \"needs_escalation\": false,\n  \"escalation_reason\": null,\n  \"follow_up_questions\": [\"Question de suivi suggérée\"]\n}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.3 }
+      },
+      "id": "e1f2a3b4-0006",
+      "name": "GPT-4 - Réponse depuis base de connaissance",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Fusion des sources de connaissance').first().json;\nlet aiResp;\ntry {\n  const raw = $input.first().json.message.content;\n  aiResp = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  aiResp = { answer: 'Désolé, je n\\'ai pas pu traiter votre question. Veuillez contacter votre manager.', confidence: 'low', needs_escalation: true };\n}\n\n// Log question pour amélioration continue\nconst logEntry = {\n  session_id: request.session_id,\n  user_id: request.user_id,\n  question: request.question,\n  answer: aiResp.answer,\n  confidence: aiResp.confidence,\n  sources: aiResp.sources_used,\n  needs_escalation: aiResp.needs_escalation,\n  timestamp: request.timestamp\n};\n\nconst updated_history = [\n  ...request.history,\n  { role: 'user', content: request.question },\n  { role: 'assistant', content: aiResp.answer }\n];\n\nreturn [{\n  json: {\n    ...logEntry,\n    follow_up_questions: aiResp.follow_up_questions || [],\n    updated_history,\n    escalation_reason: aiResp.escalation_reason\n  }\n}];"
+      },
+      "id": "e1f2a3b4-0007",
+      "name": "Assemblage réponse et logs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ $json.needs_escalation }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "e1f2a3b4-0008",
+      "name": "Escalade nécessaire ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL_MANAGERS }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=❓ *Question sans réponse dans la base de connaissance*\n\n*Collaborateur :* {{ $json.user_id }}\n*Question :* {{ $json.question }}\n*Raison escalade :* {{ $json.escalation_reason || 'Réponse introuvable' }}\n\n→ Action requise : répondre au collaborateur ET enrichir la base de connaissance"
+            }
+          ]
+        }
+      },
+      "id": "e1f2a3b4-0009",
+      "name": "Slack managers - Alerte escalade",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1640, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{ $vars.GOOGLE_SHEET_KB_LOGS_ID }}" },
+        "sheetName": "Questions",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Session": "={{ $json.session_id }}",
+            "Utilisateur": "={{ $json.user_id }}",
+            "Question": "={{ $json.question }}",
+            "Réponse": "={{ $json.answer }}",
+            "Confiance": "={{ $json.confidence }}",
+            "Escalade": "={{ $json.needs_escalation }}",
+            "Date": "={{ $json.timestamp }}"
+          }
+        }
+      },
+      "id": "e1f2a3b4-0010",
+      "name": "Google Sheets - Log questions pour amélioration",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1640, 400],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "1", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ session_id: $json.session_id, answer: $json.answer, sources: $json.sources, confidence: $json.confidence, follow_up_questions: $json.follow_up_questions, history: $json.updated_history, escalated: $json.needs_escalation }) }}"
+      },
+      "id": "e1f2a3b4-0011",
+      "name": "Réponse au collaborateur",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1840, 300]
+    },
+    {
+      "parameters": {
+        "content": "## 🤖 Chatbot Formation Équipes - Base de Connaissance IA\n\n**Objectif :** Assistant IA 24/7 pour répondre aux questions des collaborateurs depuis la base de connaissance (SOPs, processus, guides).\n\n**Déclencheur :** POST /webhook/chatbot-formation (depuis Slack bot ou interface web)\n\n**Payload :**\n```json\n{\n  \"session_id\": \"KB-123\",\n  \"user_id\": \"U12345\",\n  \"user_name\": \"Marie Dupont\",\n  \"question\": \"Comment traiter un remboursement client ?\",\n  \"history\": []\n}\n```\n\n**Pipeline :**\n1. Recherche sémantique dans Pinecone (vector DB)\n2. Recherche textuelle dans Notion\n3. GPT-4 génère réponse avec sources citées\n4. Si confiance faible → escalade manager via Slack\n5. Log toutes les questions pour améliorer la doc\n\n**Variables requises :**\n- PINECONE_API_KEY\n- NOTION_API_KEY\n- OPENAI_API_KEY\n- SLACK_WEBHOOK_URL_MANAGERS\n- GOOGLE_SHEET_KB_LOGS_ID",
+        "height": 380,
+        "width": 430
+      },
+      "id": "e1f2a3b4-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Webhook - Question collaborateur": { "main": [[{ "node": "Extraction de la question", "type": "main", "index": 0 }]] },
+    "Extraction de la question": { "main": [[{ "node": "Pinecone - Recherche sémantique docs", "type": "main", "index": 0 }, { "node": "Notion - Recherche dans base de connaissance", "type": "main", "index": 0 }]] },
+    "Notion - Recherche dans base de connaissance": { "main": [[{ "node": "Fusion des sources de connaissance", "type": "main", "index": 0 }]] },
+    "Fusion des sources de connaissance": { "main": [[{ "node": "GPT-4 - Réponse depuis base de connaissance", "type": "main", "index": 0 }]] },
+    "GPT-4 - Réponse depuis base de connaissance": { "main": [[{ "node": "Assemblage réponse et logs", "type": "main", "index": 0 }]] },
+    "Assemblage réponse et logs": { "main": [[{ "node": "Escalade nécessaire ?", "type": "main", "index": 0 }]] },
+    "Escalade nécessaire ?": {
+      "main": [
+        [{ "node": "Slack managers - Alerte escalade", "type": "main", "index": 0 }],
+        [{ "node": "Google Sheets - Log questions pour amélioration", "type": "main", "index": 0 }]
+      ]
+    },
+    "Slack managers - Alerte escalade": { "main": [[{ "node": "Réponse au collaborateur", "type": "main", "index": 0 }]] },
+    "Google Sheets - Log questions pour amélioration": { "main": [[{ "node": "Réponse au collaborateur", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "formation" }, { "name": "chatbot" }, { "name": "knowledge-base" }]
+}
