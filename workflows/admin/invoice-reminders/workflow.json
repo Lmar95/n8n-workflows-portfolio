@@ -1,13 +1,247 @@
 {
-  "name": "Invoice Reminder Automation",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["admin","invoicing","finance","automation"],
-  "meta": {
-    "description": "Monitor your invoicing tool, detect unpaid invoices at D+7, D+15, D+30, and auto-send personalized follow-up emails. Tone escalates from friendly to firm. Finance team is alerted for cases over D+45. Full tracking in CRM.",
-    "difficulty": "⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Relances Automatiques des Factures Impayées",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 💸 Relances Automatiques des Factures Impayées\n\n**Objectif :** Surveiller les factures impayées et envoyer des relances personnalisées adaptées au délai : cordial (J+7) → ferme (J+15) → urgente (J+30) → alerte équipe (J+45).\n\n**Déclenchement :** Chaque jour à 9h00\n\n**Configuration :**\n- `$vars.PENNYLANE_API_KEY` (ou QuickBooks)\n- `$vars.SENDGRID_API_KEY`\n- `$vars.STRIPE_API_KEY` (liens de paiement)\n- `$vars.HUBSPOT_API_KEY`\n- `$vars.SLACK_WEBHOOK_URL`\n- `$vars.FINANCE_EMAIL`",
+        "height": 280,
+        "width": 460
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 9 * * 1-5" }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "⏰ Vérification Quotidienne 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://app.pennylane.com/api/external/v1/customer_invoices",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.PENNYLANE_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filter[status]", "value": "not_fully_paid" },
+            { "name": "filter[date_to]", "value": "={{ new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0] }}" },
+            { "name": "per_page", "value": "100" }
+          ]
+        }
+      },
+      "id": "fetch-invoices",
+      "name": "📥 Récupérer Factures Impayées",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process invoices and determine reminder stage\nconst data = $input.first().json;\nconst invoices = data.invoices || data.data || data || [];\nconst today = new Date();\n\nconst processedInvoices = (Array.isArray(invoices) ? invoices : []).map(inv => {\n  const dueDate = new Date(inv.deadline || inv.due_date || inv.date);\n  const daysOverdue = Math.floor((today - dueDate) / 86400000);\n  \n  let reminderStage = null;\n  let reminderType = null;\n  let reminderTone = null;\n  \n  if (daysOverdue >= 45) {\n    reminderStage = 4;\n    reminderType = 'urgent_escalation';\n    reminderTone = 'URGENT - Action légale';\n  } else if (daysOverdue >= 30) {\n    reminderStage = 3;\n    reminderType = 'final_notice';\n    reminderTone = 'Ferme et dernière chance';\n  } else if (daysOverdue >= 15) {\n    reminderStage = 2;\n    reminderType = 'firm_reminder';\n    reminderTone = 'Ferme mais professionnel';\n  } else if (daysOverdue >= 7) {\n    reminderStage = 1;\n    reminderType = 'gentle_reminder';\n    reminderTone = 'Cordial et bienveillant';\n  }\n  \n  return {\n    invoiceNumber: inv.invoice_number || inv.number || inv.id,\n    invoiceId: inv.id,\n    amount: parseFloat(inv.amount || inv.total_amount || 0),\n    currency: inv.currency || 'EUR',\n    dueDate: dueDate.toLocaleDateString('fr-FR'),\n    dueDateRaw: inv.deadline || inv.due_date,\n    daysOverdue,\n    clientEmail: inv.customer?.email || inv.client_email || '',\n    clientName: inv.customer?.name || inv.client_name || 'Client',\n    clientCompany: inv.customer?.company || '',\n    invoiceUrl: inv.public_url || inv.pdf_url || '',\n    reminderStage,\n    reminderType,\n    reminderTone,\n    shouldSendReminder: reminderStage !== null,\n    notes: inv.notes || ''\n  };\n}).filter(inv => inv.shouldSendReminder);\n\nreturn processedInvoices.map(inv => ({ json: inv }));"
+      },
+      "id": "categorize",
+      "name": "⚙️ Categoriser et Qualifier les Relances",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.reminderStage }}",
+              "rightValue": 4,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ]
+        }
+      },
+      "id": "check-escalation",
+      "name": "🚨 Escalade J+45?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en recouvrement de créances. Tu rédiges des emails de relance efficaces en français, adaptés au stade de relance. Ton style: professionnel, ferme mais respectueux, orienté vers une résolution rapide."
+            },
+            {
+              "role": "user",
+              "content": "=Rédige un email de relance pour la facture suivante:\n\n- Destinataire: {{ $json.clientName }} / {{ $json.clientCompany }}\n- Email: {{ $json.clientEmail }}\n- Numéro facture: {{ $json.invoiceNumber }}\n- Montant: {{ $json.amount }} {{ $json.currency }}\n- Échéance: {{ $json.dueDate }}\n- Jours de retard: {{ $json.daysOverdue }}\n- Stade de relance: {{ $json.reminderStage }}/4\n- Ton requis: {{ $json.reminderTone }}\n\nGénère en JSON:\n{\n  \"subject\": \"Objet de l'email\",\n  \"emailBody\": \"Corps HTML de l'email complet\",\n  \"callToAction\": \"Texte du bouton de paiement\"\n}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1000,
+          "response_format": { "type": "json_object" }
+        }
+      },
+      "id": "generate-email",
+      "name": "🤖 Générer Email de Relance",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1280, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/payment_links",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.STRIPE_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "line_items[0][price_data][currency]", "value": "eur" },
+            { "name": "line_items[0][price_data][product_data][name]", "value": "={{ 'Règlement facture ' + $json.invoiceNumber }}" },
+            { "name": "line_items[0][price_data][unit_amount]", "value": "={{ Math.round($json.amount * 100) }}" },
+            { "name": "line_items[0][quantity]", "value": "1" }
+          ]
+        }
+      },
+      "id": "create-payment-link",
+      "name": "💳 Créer Lien Paiement Stripe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build final email with payment link\nconst emailData = $('🤖 Générer Email de Relance').item.json;\nconst paymentData = $('💳 Créer Lien Paiement Stripe').item.json;\nconst invoiceData = $('⚙️ Categoriser et Qualifier les Relances').item.json;\n\nconst emailContent = emailData.message?.content || emailData.choices?.[0]?.message?.content || '{}';\nlet emailJson;\ntry { emailJson = JSON.parse(emailContent); } catch(e) { emailJson = { subject: 'Relance facture ' + invoiceData.invoiceNumber, emailBody: emailContent }; }\n\nconst paymentUrl = paymentData.url || '';\n\n// Inject payment button into email body\nconst bodyWithButton = (emailJson.emailBody || '') + `\n<div style='text-align:center;margin:30px 0;'>\n  <a href='${paymentUrl}' style='background:#27ae60;color:white;padding:15px 30px;border-radius:8px;text-decoration:none;font-size:16px;font-weight:bold;display:inline-block;'>💳 Payer maintenant - ${invoiceData.amount} ${invoiceData.currency}</a>\n  <p style='margin-top:10px;color:#666;font-size:12px;'>Paiement sécurisé par Stripe</p>\n</div>`;\n\nreturn [{\n  json: {\n    ...invoiceData,\n    emailSubject: emailJson.subject,\n    emailBody: bodyWithButton,\n    paymentUrl\n  }\n}];"
+      },
+      "id": "build-final-email",
+      "name": "📧 Construire Email Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.SENDGRID_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"personalizations\": [{\n    \"to\": [{\"email\": \"{{ $json.clientEmail }}\", \"name\": \"{{ $json.clientName }}\"}],\n    \"subject\": {{ JSON.stringify($json.emailSubject) }}\n  }],\n  \"from\": {\"email\": \"{{ $vars.FINANCE_EMAIL || 'finance@votre-entreprise.fr' }}\", \"name\": \"Service Comptabilité\"},\n  \"content\": [{\"type\": \"text/html\", \"value\": {{ JSON.stringify($json.emailBody) }}}],\n  \"tracking_settings\": {\n    \"click_tracking\": {\"enable\": true},\n    \"open_tracking\": {\"enable\": true}\n  }\n}"
+      },
+      "id": "send-reminder",
+      "name": "📤 Envoyer Relance Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\"type\": \"plain_text\", \"text\": \"🚨 Escalade Facture J+45 - Action Requise\"}\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\"type\": \"mrkdwn\", \"text\": \"*Client:*\\n{{ $json.clientName }} / {{ $json.clientCompany }}\"},\n        {\"type\": \"mrkdwn\", \"text\": \"*Facture:*\\n{{ $json.invoiceNumber }}\"},\n        {\"type\": \"mrkdwn\", \"text\": \"*Montant:*\\n{{ $json.amount }} {{ $json.currency }}\"},\n        {\"type\": \"mrkdwn\", \"text\": \"*Retard:*\\n{{ $json.daysOverdue }} jours\"}\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\"type\": \"mrkdwn\", \"text\": \"⚠️ Cette facture dépasse 45 jours. Intervention de l'équipe finance requise.\"}\n    }\n  ]\n}"
+      },
+      "id": "slack-escalation",
+      "name": "🚨 Alerte Slack Escalade",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 200]
+    },
+    {
+      "parameters": {
+        "resource": "spreadsheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $vars.INVOICE_TRACKING_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": { "__rl": true, "value": "Relances", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date Relance": "={{ new Date().toISOString().split('T')[0] }}",
+            "Facture": "={{ $json.invoiceNumber }}",
+            "Client": "={{ $json.clientName }}",
+            "Entreprise": "={{ $json.clientCompany }}",
+            "Montant": "={{ $json.amount }}",
+            "Jours Retard": "={{ $json.daysOverdue }}",
+            "Stade": "={{ $json.reminderStage }}",
+            "Email Envoyé": "Oui",
+            "Lien Paiement": "={{ $json.paymentUrl }}"
+          }
+        }
+      },
+      "id": "log-reminder",
+      "name": "📊 Logger Relance (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [2240, 360]
+    }
+  ],
+  "connections": {
+    "⏰ Vérification Quotidienne 9h": {
+      "main": [[{ "node": "📥 Récupérer Factures Impayées", "type": "main", "index": 0 }]]
+    },
+    "📥 Récupérer Factures Impayées": {
+      "main": [[{ "node": "⚙️ Categoriser et Qualifier les Relances", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Categoriser et Qualifier les Relances": {
+      "main": [
+        [
+          { "node": "🚨 Escalade J+45?", "type": "main", "index": 0 },
+          { "node": "🤖 Générer Email de Relance", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🚨 Escalade J+45?": {
+      "main": [
+        [{ "node": "🚨 Alerte Slack Escalade", "type": "main", "index": 0 }]
+      ]
+    },
+    "🤖 Générer Email de Relance": {
+      "main": [[{ "node": "💳 Créer Lien Paiement Stripe", "type": "main", "index": 0 }]]
+    },
+    "💳 Créer Lien Paiement Stripe": {
+      "main": [[{ "node": "📧 Construire Email Final", "type": "main", "index": 0 }]]
+    },
+    "📧 Construire Email Final": {
+      "main": [[{ "node": "📤 Envoyer Relance Email", "type": "main", "index": 0 }]]
+    },
+    "📤 Envoyer Relance Email": {
+      "main": [[{ "node": "📊 Logger Relance (Google Sheets)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "admin" }, { "name": "facturation" }, { "name": "recouvrement" }]
 }
