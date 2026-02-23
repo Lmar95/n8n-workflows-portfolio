@@ -1,0 +1,249 @@
+{
+  "name": "Prospection automatisée - Levées de fonds et acquisitions",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1,3,5" }] }
+      },
+      "id": "a1b2c3d4-0001",
+      "name": "Déclencheur - Lun/Mer/Ven 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.crunchbase.com/api/v4/searches/funding_rounds",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "body",
+              "value": "={\"field_ids\":[\"identifier\",\"announced_on\",\"investment_type\",\"money_raised\",\"num_investors\",\"funded_organization_identifier\",\"funded_organization_location\",\"funded_organization_categories\"],\"query\":[{\"type\":\"predicate\",\"field_id\":\"announced_on\",\"operator_id\":\"gte\",\"values\":[\"{{ $today.minus({days: 2}).toFormat('yyyy-MM-dd') }}\"]},{\"type\":\"predicate\",\"field_id\":\"investment_type\",\"operator_id\":\"includes\",\"values\":[\"series_a\",\"series_b\",\"seed\"]},{\"type\":\"predicate\",\"field_id\":\"money_raised\",\"operator_id\":\"gte\",\"values\":[{\"value\":500000,\"currency\":\"USD\"}]}],\"sort\":[{\"field_id\":\"announced_on\",\"sort_direction\":\"desc\"}],\"limit\":50}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-cb-user-key", "value": "={{ $vars.CRUNCHBASE_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0002",
+      "name": "Crunchbase - Nouvelles levées de fonds",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.crunchbase.com/api/v4/searches/acquisitions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "body",
+              "value": "={\"field_ids\":[\"identifier\",\"announced_on\",\"price\",\"acquirer_identifier\",\"acquiree_identifier\",\"acquisition_type\"],\"query\":[{\"type\":\"predicate\",\"field_id\":\"announced_on\",\"operator_id\":\"gte\",\"values\":[\"{{ $today.minus({days: 2}).toFormat('yyyy-MM-dd') }}\"]}],\"sort\":[{\"field_id\":\"announced_on\",\"sort_direction\":\"desc\"}],\"limit\":30}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-cb-user-key", "value": "={{ $vars.CRUNCHBASE_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0003",
+      "name": "Crunchbase - Nouvelles acquisitions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByFields": { "values": [] },
+        "options": { "clashHandling": { "values": { "resolveClash": "addSuffix" } } }
+      },
+      "id": "a1b2c3d4-0004",
+      "name": "Fusion des signaux",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  // Traitement levées de fonds\n  if (data.entities) {\n    for (const entity of data.entities) {\n      const props = entity.properties;\n      const org = props.funded_organization_identifier;\n      const amount = props.money_raised;\n      \n      results.push({\n        type: 'funding',\n        company_name: org?.value || 'N/A',\n        company_id: org?.entity_def_id,\n        amount_usd: amount?.value_usd || 0,\n        amount_formatted: amount ? `${Math.round(amount.value_usd / 1000000)}M€` : 'N/A',\n        investment_type: props.investment_type || 'N/A',\n        announced_date: props.announced_on,\n        location: props.funded_organization_location?.map(l => l.value).join(', ') || 'N/A',\n        categories: props.funded_organization_categories?.map(c => c.value).join(', ') || 'N/A',\n        num_investors: props.num_investors || 0,\n        signal_strength: amount?.value_usd > 5000000 ? 'HOT' : amount?.value_usd > 1000000 ? 'WARM' : 'COLD',\n        prospecting_angle: `${org?.value || 'Cette entreprise'} vient de lever ${amount ? Math.round(amount.value_usd/1000000) + 'M€' : 'des fonds'}. Ils cherchent à accélérer leur croissance. C'est le moment idéal pour proposer vos services.`,\n        enrichment_needed: true\n      });\n    }\n  }\n}\n\nreturn results.filter(r => r.signal_strength !== 'COLD').map(r => ({ json: r }));"
+      },
+      "id": "a1b2c3d4-0005",
+      "name": "Normalisation et scoring des signaux",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.signal_strength }}",
+              "rightValue": "HOT",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0006",
+      "name": "Filtre signaux HOT",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.dropcontact.com/v1/enrich",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Access-Token", "value": "={{ $vars.DROPCONTACT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "data", "value": "=[{\"company\": \"{{ $json.company_name }}\", \"website\": \"\"}]" },
+            { "name": "siren", "value": "=true" },
+            { "name": "language", "value": "=fr" }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0007",
+      "name": "Enrichissement Dropcontact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1240, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const signal = $('Filtre signaux HOT').first().json;\nconst enrichData = $input.first().json;\n\nconst contacts = enrichData.contacts || [];\nconst decision_maker = contacts.find(c => c.job_title?.toLowerCase().includes('ceo') || c.job_title?.toLowerCase().includes('cto') || c.job_title?.toLowerCase().includes('coo') || c.job_title?.toLowerCase().includes('directeur'));\n\nreturn [{\n  json: {\n    ...signal,\n    decision_maker_name: decision_maker?.full_name || 'N/A',\n    decision_maker_email: decision_maker?.email || 'N/A',\n    decision_maker_title: decision_maker?.job_title || 'N/A',\n    linkedin_url: decision_maker?.linkedin || 'N/A',\n    company_website: enrichData.website || 'N/A',\n    company_phone: enrichData.phone || 'N/A',\n    enriched_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0008",
+      "name": "Fusion données enrichies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en prospection B2B. Tu rédiges des messages de prospection personnalisés, percutants et non-génériques, en capitalisant sur les signaux de levée de fonds ou d'acquisition comme déclencheur de conversation."
+            },
+            {
+              "role": "user",
+              "content": "=Rédige un message de prospection LinkedIn (300 car max) et un email de prospection (200 mots max) pour contacter le décideur de {{ $json.company_name }} qui vient de {{ $json.type === 'funding' ? 'lever ' + $json.amount_formatted : 'réaliser une acquisition' }}.\n\nInfos :\n- Entreprise : {{ $json.company_name }}\n- Secteur : {{ $json.categories }}\n- Localisation : {{ $json.location }}\n- Décideur : {{ $json.decision_maker_name }} ({{ $json.decision_maker_title }})\n- Signal : {{ $json.prospecting_angle }}\n\nObjectif : décrocher un call de découverte. Capitalise sur la levée de fonds comme signal de croissance. Sois direct, professionnel, et montre que tu comprends leurs enjeux post-levée. Pas de formules génériques.\n\nRéponse au format JSON : {\"linkedin_message\": \"...\", \"email_subject\": \"...\", \"email_body\": \"...\"}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.7 }
+      },
+      "id": "a1b2c3d4-0009",
+      "name": "GPT-4 - Génération messages prospection",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1640, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $('Fusion données enrichies').first().json;\nlet messages;\ntry {\n  const raw = $input.first().json.message.content;\n  messages = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  messages = { linkedin_message: 'Erreur génération', email_subject: 'Erreur', email_body: 'Erreur' };\n}\n\nreturn [{\n  json: {\n    ...item,\n    linkedin_message: messages.linkedin_message,\n    email_subject: messages.email_subject,\n    email_body: messages.email_body,\n    processed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0010",
+      "name": "Assemblage données finales",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{ $vars.GOOGLE_SHEET_PROSPECTION_FONDS_ID }}" },
+        "sheetName": "Prospects",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0011",
+      "name": "Google Sheets - Sauvegarde",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [2040, 200],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "1", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🚀 *Nouveau signal fort de prospection !*\n\n*Entreprise :* {{ $json.company_name }}\n*Signal :* {{ $json.type === 'funding' ? '💰 Levée de fonds ' + $json.amount_formatted : '🤝 Acquisition' }}\n*Secteur :* {{ $json.categories }}\n*Décideur :* {{ $json.decision_maker_name }} - {{ $json.decision_maker_title }}\n*Email :* {{ $json.decision_maker_email }}\n*LinkedIn :* {{ $json.linkedin_url }}\n\n*Message LinkedIn rédigé :*\n{{ $json.linkedin_message }}"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0012",
+      "name": "Slack - Alerte équipe commerciale",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2040, 350]
+    },
+    {
+      "parameters": {
+        "content": "## 🚀 Prospection Levées de Fonds & Acquisitions\n\n**Objectif :** Détecter les signaux de levées de fonds et acquisitions, enrichir les contacts décideurs, et générer automatiquement des messages de prospection personnalisés.\n\n**Déclencheur :** Lundi, Mercredi, Vendredi à 8h\n\n**Sources :** Crunchbase API (levées Series A/B/Seed > 500K€, acquisitions)\n\n**Pipeline :**\n1. Récupère les levées et acquisitions des 2 derniers jours\n2. Score les signaux (HOT > 5M€, WARM > 1M€)\n3. Enrichit les décideurs via Dropcontact\n4. Génère messages LinkedIn + email avec GPT-4\n5. Sauvegarde dans Google Sheets\n6. Alerte Slack pour les commerciaux\n\n**Variables requises :**\n- CRUNCHBASE_API_KEY\n- DROPCONTACT_API_KEY\n- OPENAI_API_KEY\n- SLACK_WEBHOOK_URL\n- GOOGLE_SHEET_PROSPECTION_FONDS_ID",
+        "height": 350,
+        "width": 400
+      },
+      "id": "a1b2c3d4-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Déclencheur - Lun/Mer/Ven 8h": {
+      "main": [[{ "node": "Crunchbase - Nouvelles levées de fonds", "type": "main", "index": 0 }, { "node": "Crunchbase - Nouvelles acquisitions", "type": "main", "index": 0 }]]
+    },
+    "Crunchbase - Nouvelles levées de fonds": { "main": [[{ "node": "Fusion des signaux", "type": "main", "index": 0 }]] },
+    "Crunchbase - Nouvelles acquisitions": { "main": [[{ "node": "Fusion des signaux", "type": "main", "index": 1 }]] },
+    "Fusion des signaux": { "main": [[{ "node": "Normalisation et scoring des signaux", "type": "main", "index": 0 }]] },
+    "Normalisation et scoring des signaux": { "main": [[{ "node": "Filtre signaux HOT", "type": "main", "index": 0 }]] },
+    "Filtre signaux HOT": { "main": [[{ "node": "Enrichissement Dropcontact", "type": "main", "index": 0 }]] },
+    "Enrichissement Dropcontact": { "main": [[{ "node": "Fusion données enrichies", "type": "main", "index": 0 }]] },
+    "Fusion données enrichies": { "main": [[{ "node": "GPT-4 - Génération messages prospection", "type": "main", "index": 0 }]] },
+    "GPT-4 - Génération messages prospection": { "main": [[{ "node": "Assemblage données finales", "type": "main", "index": 0 }]] },
+    "Assemblage données finales": { "main": [[{ "node": "Google Sheets - Sauvegarde", "type": "main", "index": 0 }, { "node": "Slack - Alerte équipe commerciale", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "prospection" }, { "name": "crunchbase" }]
+}
