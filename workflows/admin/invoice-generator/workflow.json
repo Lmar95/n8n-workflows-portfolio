@@ -1,13 +1,205 @@
 {
-  "name": "Invoice Generator",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["admin","invoicing","finance","automation"],
-  "meta": {
-    "description": "Triggered by a validated order, delivered service, or recurring subscription cycle. Auto-generates a compliant invoice (auto-numbering, legal mentions, correct VAT), emails it with a payment link, and syncs with accounting.",
-    "difficulty": "⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Création Automatique des Factures",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🧾 Création Automatique des Factures\n\n**Objectif :** Déclenchée par commande validée, prestation livrée ou fin de mois — génère la facture conforme, l'envoie au client avec lien de paiement, et synchronise avec la comptabilité.\n\n**Déclenchements :**\n1. Webhook (commande validée)\n2. Schedule mensuel (abonnements récurrents)\n3. HubSpot deal → Closed Won\n\n**Configuration :**\n- `$vars.PENNYLANE_API_KEY`\n- `$vars.STRIPE_API_KEY`\n- `$vars.SENDGRID_API_KEY`\n- `$vars.HUBSPOT_API_KEY`\n- `$vars.COMPANY_NAME`, `$vars.COMPANY_SIREN`, `$vars.COMPANY_VAT`",
+        "height": 300,
+        "width": 480
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create-invoice",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "🌐 Webhook - Créer Facture",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [540, 240]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 8 1 * *" }
+          ]
+        }
+      },
+      "id": "monthly-schedule",
+      "name": "📅 Facturation Mensuelle (1er du mois)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [540, 440]
+    },
+    {
+      "parameters": {
+        "eventsUI": {
+          "values": [{ "name": "deal.propertyChange" }]
+        },
+        "additionalFields": {
+          "propertyName": "dealstage"
+        }
+      },
+      "id": "hubspot-trigger",
+      "name": "🔵 HubSpot - Deal Closed Won",
+      "type": "n8n-nodes-base.hubspotTrigger",
+      "typeVersion": 1,
+      "position": [540, 640]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize invoice data from any trigger source\nconst item = $input.first().json;\nconst body = item.body || item;\nconst source = body.source || 'webhook';\n\n// Check if this is from HubSpot deal closed\nconst isHubSpot = body.objectType === 'DEAL' || body.propertyName === 'dealstage';\nconst isMonthly = body.type === 'recurring';\n\n// Build normalized invoice data\nconst invoiceData = {\n  // Client info\n  clientName: body.clientName || body.customer?.name || body.properties?.dealname?.split(' - ')[0] || 'Client',\n  clientEmail: body.clientEmail || body.customer?.email || '',\n  clientCompany: body.clientCompany || body.customer?.company || '',\n  clientAddress: body.clientAddress || '',\n  clientVat: body.clientVat || '',\n  \n  // Invoice details\n  invoiceType: body.invoiceType || (isMonthly ? 'recurring' : 'one-time'),\n  currency: body.currency || 'EUR',\n  paymentTerms: body.paymentTerms || '30 jours fin de mois',\n  dueDate: body.dueDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],\n  \n  // Line items\n  items: body.items || [\n    {\n      description: body.description || body.properties?.dealname || 'Prestation de service',\n      quantity: 1,\n      unitPrice: parseFloat(body.amount || body.properties?.amount || 0),\n      vatRate: 20\n    }\n  ],\n  \n  // Reference\n  dealId: body.dealId || body.objectId || '',\n  orderId: body.orderId || '',\n  referenceNote: body.referenceNote || '',\n  \n  // Meta\n  source,\n  isHubSpot,\n  isMonthly,\n  generatedAt: new Date().toISOString()\n};\n\n// Calculate totals\nlet subtotalHT = 0;\nconst processedItems = invoiceData.items.map(item => {\n  const lineHT = (parseFloat(item.quantity) || 1) * (parseFloat(item.unitPrice) || 0);\n  const lineTVA = lineHT * ((parseFloat(item.vatRate) || 20) / 100);\n  subtotalHT += lineHT;\n  return { ...item, lineHT, lineTVA, lineTTC: lineHT + lineTVA };\n});\n\nconst totalTVA = processedItems.reduce((s, i) => s + i.lineTVA, 0);\nconst totalTTC = subtotalHT + totalTVA;\n\n// Generate invoice number\nconst now = new Date();\nconst invoiceNumber = `FA-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}-${Date.now().toString().slice(-5)}`;\n\nreturn [{\n  json: {\n    ...invoiceData,\n    items: processedItems,\n    invoiceNumber,\n    invoiceDate: now.toLocaleDateString('fr-FR'),\n    invoiceDateRaw: now.toISOString().split('T')[0],\n    subtotalHT: subtotalHT.toFixed(2),\n    totalTVA: totalTVA.toFixed(2),\n    totalTTC: totalTTC.toFixed(2),\n    totalTTCNum: totalTTC,\n    // Company (seller) info\n    sellerName: $vars.COMPANY_NAME || 'Votre Entreprise SAS',\n    sellerSiren: $vars.COMPANY_SIREN || '123456789',\n    sellerVat: $vars.COMPANY_VAT || 'FR12345678901',\n    sellerAddress: $vars.COMPANY_ADDRESS || '1 rue de la Paix, 75001 Paris',\n    sellerEmail: $vars.FINANCE_EMAIL || 'finance@votre-entreprise.fr',\n    sellerPhone: $vars.COMPANY_PHONE || ''\n  }\n}];"
+      },
+      "id": "normalize",
+      "name": "⚙️ Normaliser et Calculer Facture",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [820, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://app.pennylane.com/api/external/v1/customer_invoices",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.PENNYLANE_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"create_customer\": true,\n  \"date\": \"{{ $json.invoiceDateRaw }}\",\n  \"deadline\": \"{{ $json.dueDate }}\",\n  \"customer\": {\n    \"name\": \"{{ $json.clientName }}\",\n    \"email\": \"{{ $json.clientEmail }}\",\n    \"billing_name\": \"{{ $json.clientCompany || $json.clientName }}\",\n    \"delivery_address\": {\"address\": \"{{ $json.clientAddress }}\"}\n  },\n  \"line_items\": {{ JSON.stringify($json.items.map(item => ({label: item.description, quantity: item.quantity, unit_price: item.unitPrice, vat_rate: (item.vatRate || 20) + '%'}))) }},\n  \"currency\": \"{{ $json.currency }}\",\n  \"special_mention\": \"{{ $json.referenceNote }}\"\n}"
+      },
+      "id": "create-pennylane",
+      "name": "💼 Créer Facture (Pennylane)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1060, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build HTML invoice for PDF\nconst q = $('⚙️ Normaliser et Calculer Facture').item.json;\nconst pennylaneData = $input.first().json;\n\nconst invoiceUrl = pennylaneData.invoice?.public_url || pennylaneData.public_url || '';\n\nconst itemsRows = q.items.map(item => `\n  <tr>\n    <td style='padding:12px;border-bottom:1px solid #eee;'>${item.description}</td>\n    <td style='padding:12px;border-bottom:1px solid #eee;text-align:center;'>${item.quantity}</td>\n    <td style='padding:12px;border-bottom:1px solid #eee;text-align:right;'>${parseFloat(item.unitPrice).toFixed(2)} €</td>\n    <td style='padding:12px;border-bottom:1px solid #eee;text-align:center;'>${item.vatRate || 20}%</td>\n    <td style='padding:12px;border-bottom:1px solid #eee;text-align:right;font-weight:bold;'>${item.lineHT.toFixed(2)} €</td>\n  </tr>\n`).join('');\n\nconst htmlInvoice = `<!DOCTYPE html>\n<html lang='fr'><head><meta charset='UTF-8'>\n<style>\n  body{font-family:Arial,sans-serif;margin:0;padding:40px;color:#333;}\n  .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:40px;}\n  .logo{font-size:22px;font-weight:bold;color:#1a1a2e;}\n  .invoice-label{background:#1a1a2e;color:white;padding:8px 25px;border-radius:5px;font-size:14px;letter-spacing:2px;}\n  .parties{display:flex;justify-content:space-between;margin:30px 0;}\n  .party{background:#f8f9fa;padding:20px;border-radius:8px;width:46%;}\n  .party h4{margin:0 0 10px;color:#1a1a2e;font-size:12px;text-transform:uppercase;letter-spacing:1px;}\n  table{width:100%;border-collapse:collapse;margin:20px 0;}\n  thead{background:#1a1a2e;color:white;}\n  th{padding:12px;text-align:left;font-size:13px;}\n  .totals-table{float:right;width:300px;border:1px solid #eee;border-radius:8px;overflow:hidden;}\n  .totals-table td{padding:10px 15px;}\n  .total-final{background:#1a1a2e;color:white;font-weight:bold;font-size:16px;}\n  .legal{margin-top:40px;padding:15px;background:#f8f9fa;border-radius:5px;font-size:11px;color:#666;}\n  .stamp{float:right;border:2px solid #27ae60;color:#27ae60;padding:10px 20px;border-radius:5px;font-weight:bold;transform:rotate(-15deg);font-size:14px;}\n</style>\n</head><body>\n<div class='header'>\n  <div>\n    <div class='logo'>${q.sellerName}</div>\n    <div style='margin-top:5px;color:#666;font-size:13px;'>${q.sellerAddress}</div>\n    <div style='color:#666;font-size:13px;'>${q.sellerEmail} | ${q.sellerPhone}</div>\n    <div style='color:#666;font-size:12px;'>SIRET: ${q.sellerSiren} | TVA: ${q.sellerVat}</div>\n  </div>\n  <div style='text-align:right;'>\n    <div class='invoice-label'>FACTURE</div>\n    <div style='font-size:20px;font-weight:bold;margin-top:10px;'>${q.invoiceNumber}</div>\n    <div style='color:#666;'>Date: ${q.invoiceDate}</div>\n    <div style='color:#666;'>Échéance: ${new Date(q.dueDate).toLocaleDateString('fr-FR')}</div>\n  </div>\n</div>\n\n<div class='parties'>\n  <div class='party'>\n    <h4>Émetteur</h4>\n    <strong>${q.sellerName}</strong><br/>\n    ${q.sellerAddress}<br/>\n    TVA: ${q.sellerVat}\n  </div>\n  <div class='party'>\n    <h4>Facturé à</h4>\n    <strong>${q.clientCompany || q.clientName}</strong><br/>\n    ${q.clientName}<br/>\n    ${q.clientAddress || ''}<br/>\n    ${q.clientVat ? 'TVA: ' + q.clientVat : ''}\n  </div>\n</div>\n\n<table>\n  <thead><tr>\n    <th>Description</th>\n    <th style='text-align:center;'>Qté</th>\n    <th style='text-align:right;'>Prix HT</th>\n    <th style='text-align:center;'>TVA</th>\n    <th style='text-align:right;'>Total HT</th>\n  </tr></thead>\n  <tbody>${itemsRows}</tbody>\n</table>\n\n<div style='overflow:hidden;margin-top:20px;'>\n  <table class='totals-table'>\n    <tr><td>Total HT</td><td style='text-align:right;'>${q.subtotalHT} €</td></tr>\n    <tr><td>TVA</td><td style='text-align:right;'>${q.totalTVA} €</td></tr>\n    <tr class='total-final'><td>Total TTC</td><td style='text-align:right;'>${q.totalTTC} €</td></tr>\n  </table>\n</div>\n\n<div style='clear:both;margin-top:30px;'>\n  <p><strong>Conditions de paiement:</strong> ${q.paymentTerms}</p>\n  ${q.referenceNote ? '<p><strong>Référence:</strong> ' + q.referenceNote + '</p>' : ''}\n</div>\n\n<div class='legal'>\n  Pénalités de retard: 3x le taux d'intérêt légal. Indemnité forfaitaire de recouvrement: 40€.<br/>\n  En cas de non-paiement à l'échéance, des pénalités seront appliquées de plein droit.\n</div>\n</body></html>`;\n\nreturn [{\n  json: {\n    ...q,\n    htmlInvoice,\n    pennylaneInvoiceId: pennylaneData.invoice?.id || pennylaneData.id || '',\n    pennylanePublicUrl: invoiceUrl\n  }\n}];"
+      },
+      "id": "build-invoice-html",
+      "name": "📄 Construire Facture HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/payment_links",
+        "sendHeaders": true,
+        "headerParameters": [
+          { "name": "Authorization", "value": "=Bearer {{ $vars.STRIPE_API_KEY }}" }
+        ],
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "line_items[0][price_data][currency]", "value": "eur" },
+            { "name": "line_items[0][price_data][product_data][name]", "value": "={{ 'Facture ' + $json.invoiceNumber }}" },
+            { "name": "line_items[0][price_data][unit_amount]", "value": "={{ Math.round($json.totalTTCNum * 100) }}" },
+            { "name": "line_items[0][quantity]", "value": "1" },
+            { "name": "metadata[invoice_number]", "value": "={{ $json.invoiceNumber }}" },
+            { "name": "metadata[client_email]", "value": "={{ $json.clientEmail }}" }
+          ]
+        }
+      },
+      "id": "stripe-payment",
+      "name": "💳 Générer Lien Paiement Stripe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.SENDGRID_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"personalizations\": [{\n    \"to\": [{\"email\": \"{{ $json.clientEmail }}\", \"name\": \"{{ $json.clientName }}\"}],\n    \"subject\": \"Facture {{ $json.invoiceNumber }} - {{ $json.totalTTC }} €\"\n  }],\n  \"from\": {\"email\": \"{{ $json.sellerEmail }}\", \"name\": \"{{ $json.sellerName }}\"},\n  \"content\": [{\n    \"type\": \"text/html\",\n    \"value\": \"<html><body style='font-family:Arial;max-width:600px;margin:0 auto;'><h2>Votre facture {{ $json.invoiceNumber }}</h2><p>Bonjour {{ $json.clientName }},</p><p>Veuillez trouver ci-joint votre facture <strong>{{ $json.invoiceNumber }}</strong> d'un montant de <strong>{{ $json.totalTTC }} €</strong>.</p><div style='background:#f8f9fa;padding:20px;border-radius:8px;margin:20px 0;'><table style='width:100%;'><tr><td>Montant HT</td><td style='text-align:right'><strong>{{ $json.subtotalHT }} €</strong></td></tr><tr><td>TVA</td><td style='text-align:right'>{{ $json.totalTVA }} €</td></tr><tr style='background:#1a1a2e;color:white;'><td style='padding:10px'><strong>Total TTC</strong></td><td style='text-align:right;padding:10px'><strong>{{ $json.totalTTC }} €</strong></td></tr></table></div><p>⏰ <strong>Échéance:</strong> {{ new Date($json.dueDate).toLocaleDateString('fr-FR') }}</p><div style='text-align:center;margin:30px 0;'><a href='{{ $('💳 Générer Lien Paiement Stripe').item.json.url }}' style='background:#27ae60;color:white;padding:15px 30px;border-radius:8px;text-decoration:none;font-size:16px;font-weight:bold;display:inline-block;'>💳 Payer en ligne maintenant</a></div><p>Merci pour votre confiance.</p><p>Cordialement,<br/>{{ $json.sellerName }}</p></body></html>\"\n  }]\n}"
+      },
+      "id": "send-invoice-email",
+      "name": "📧 Envoyer Facture par Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 340]
+    },
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "update",
+        "dealId": "={{ $json.dealId }}",
+        "updateFields": {
+          "dealstage": "closedwon"
+        }
+      },
+      "id": "update-hubspot",
+      "name": "🔵 Mettre à Jour HubSpot",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [2020, 340]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"invoiceNumber\": \"{{ $('⚙️ Normaliser et Calculer Facture').item.json.invoiceNumber }}\",\n  \"totalTTC\": \"{{ $('⚙️ Normaliser et Calculer Facture').item.json.totalTTC }} €\",\n  \"emailSent\": true,\n  \"paymentUrl\": \"{{ $('💳 Générer Lien Paiement Stripe').item.json.url }}\",\n  \"pennylaneId\": \"{{ $('📄 Construire Facture HTML').item.json.pennylaneInvoiceId }}\"\n}"
+      },
+      "id": "respond",
+      "name": "✅ Confirmer Création Facture",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2260, 340]
+    }
+  ],
+  "connections": {
+    "🌐 Webhook - Créer Facture": {
+      "main": [[{ "node": "⚙️ Normaliser et Calculer Facture", "type": "main", "index": 0 }]]
+    },
+    "📅 Facturation Mensuelle (1er du mois)": {
+      "main": [[{ "node": "⚙️ Normaliser et Calculer Facture", "type": "main", "index": 0 }]]
+    },
+    "🔵 HubSpot - Deal Closed Won": {
+      "main": [[{ "node": "⚙️ Normaliser et Calculer Facture", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Normaliser et Calculer Facture": {
+      "main": [[{ "node": "💼 Créer Facture (Pennylane)", "type": "main", "index": 0 }]]
+    },
+    "💼 Créer Facture (Pennylane)": {
+      "main": [[{ "node": "📄 Construire Facture HTML", "type": "main", "index": 0 }]]
+    },
+    "📄 Construire Facture HTML": {
+      "main": [
+        [
+          { "node": "💳 Générer Lien Paiement Stripe", "type": "main", "index": 0 },
+          { "node": "📧 Envoyer Facture par Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📧 Envoyer Facture par Email": {
+      "main": [[{ "node": "🔵 Mettre à Jour HubSpot", "type": "main", "index": 0 }]]
+    },
+    "🔵 Mettre à Jour HubSpot": {
+      "main": [[{ "node": "✅ Confirmer Création Facture", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "admin" }, { "name": "facturation" }, { "name": "comptabilite" }]
 }
