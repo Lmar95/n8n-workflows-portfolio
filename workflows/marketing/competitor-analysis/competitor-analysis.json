@@ -1,0 +1,247 @@
+{
+  "name": "Analyses Concurrentielles Automatisées",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🕵️ Analyses Concurrentielles Automatisées\n\n**Objectif :** Surveillance continue de 5-10 concurrents : nouveaux produits, pricing, contenus, réseaux sociaux, mentions presse, recrutements. Rapport mensuel avec analyse des tendances.\n\n**Déclenchement :** Tous les lundis à 9h + webhook manuel\n\n**Configuration :**\n- `$vars.COMPETITORS` : JSON array `[{\"name\":\"Concurrent A\",\"domain\":\"concurrent-a.fr\",\"linkedin\":\"company-slug\"}]`\n- `$vars.APIFY_TOKEN` : Token API Apify\n- `$vars.OPENAI_API_KEY`\n- `$vars.AIRTABLE_API_KEY` + `$vars.AIRTABLE_BASE_ID`\n- `$vars.SLACK_WEBHOOK_URL`",
+        "height": 280,
+        "width": 500
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "⏰ Déclencheur Hebdomadaire Lundi",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Load competitors list from environment variable or use defaults\nlet competitors;\ntry {\n  competitors = JSON.parse($vars.COMPETITORS || '[]');\n} catch(e) {\n  competitors = [\n    { name: 'Concurrent A', domain: 'concurrent-a.fr', linkedin: 'concurrent-a' },\n    { name: 'Concurrent B', domain: 'concurrent-b.com', linkedin: 'concurrent-b' },\n    { name: 'Concurrent C', domain: 'concurrent-c.io', linkedin: 'concurrent-c' }\n  ];\n}\n\nreturn competitors.map(c => ({\n  json: {\n    ...c,\n    analysisDate: new Date().toISOString().split('T')[0],\n    weekNumber: Math.ceil((new Date() - new Date(new Date().getFullYear(), 0, 1)) / 604800000)\n  }\n}));"
+      },
+      "id": "load-competitors",
+      "name": "📋 Charger Liste des Concurrents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/apify~website-content-crawler/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "token", "value": "={{ $vars.APIFY_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"startUrls\": [{\"url\": \"https://{{ $json.domain }}\"}],\"maxCrawlPages\": 5,\"crawlerType\": \"cheerio\",\"includeUrlGlobs\": [\"https://{{ $json.domain }}/**\"]}"
+      },
+      "id": "scrape-website",
+      "name": "🕸️ Scraper Site Concurrent (Apify)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://newsapi.org/v2/everything",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.name }}" },
+            { "name": "from", "value": "={{ new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0] }}" },
+            { "name": "language", "value": "fr" },
+            { "name": "sortBy", "value": "relevancy" },
+            { "name": "apiKey", "value": "={{ $vars.NEWS_API_KEY }}" }
+          ]
+        }
+      },
+      "id": "news-monitoring",
+      "name": "📰 Monitoring Presse & Mentions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/apify~linkedin-company-posts-scraper/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "token", "value": "={{ $vars.APIFY_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"companyUrls\": [\"https://www.linkedin.com/company/{{ $json.linkedin }}\"],\"maxPosts\": 5}"
+      },
+      "id": "linkedin-posts",
+      "name": "💼 Posts LinkedIn Concurrent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 480]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.apify.com/v2/acts/bebity~linkedin-jobs-scraper/run-sync-get-dataset-items",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "token", "value": "={{ $vars.APIFY_TOKEN }}" },
+            { "name": "company", "value": "={{ $json.name }}" },
+            { "name": "limit", "value": "20" }
+          ]
+        }
+      },
+      "id": "job-postings",
+      "name": "💼 Offres d'Emploi Concurrent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 640]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all competitor intelligence data\nconst websiteData = $('🕸️ Scraper Site Concurrent (Apify)').item.json;\nconst newsData = $('📰 Monitoring Presse & Mentions').item.json;\nconst linkedinData = $('💼 Posts LinkedIn Concurrent').item.json;\nconst jobData = $('💼 Offres d\\'Emploi Concurrent').item.json;\nconst competitor = $('📋 Charger Liste des Concurrents').item.json;\n\n// Extract website content summary\nconst pages = Array.isArray(websiteData) ? websiteData : [websiteData];\nconst websiteSummary = pages.slice(0, 3).map(p => ({\n  url: p.url || '',\n  title: p.metadata?.title || p.title || '',\n  description: (p.text || p.content || '').substring(0, 300)\n}));\n\n// Extract news\nconst articles = newsData.articles || [];\nconst recentNews = articles.slice(0, 5).map(a => ({\n  title: a.title,\n  source: a.source?.name,\n  publishedAt: a.publishedAt,\n  description: a.description\n}));\n\n// Detect fundraising mentions\nconst fundraisingKeywords = ['levée', 'série', 'financement', 'investissement', 'million', 'acquisition'];\nconst fundraisingNews = articles.filter(a => \n  fundraisingKeywords.some(kw => (a.title + ' ' + a.description).toLowerCase().includes(kw))\n);\n\n// LinkedIn posts\nconst posts = Array.isArray(linkedinData) ? linkedinData : [];\nconst topPosts = posts.slice(0, 3).map(p => ({\n  text: (p.text || p.content || '').substring(0, 200),\n  likes: p.numLikes || 0,\n  comments: p.numComments || 0\n}));\n\n// Job postings by department\nconst jobs = Array.isArray(jobData) ? jobData : [];\nconst jobsByDept = {};\njobs.forEach(j => {\n  const dept = j.department || j.function || 'Other';\n  jobsByDept[dept] = (jobsByDept[dept] || 0) + 1;\n});\n\nreturn [{\n  json: {\n    competitor: competitor.name,\n    domain: competitor.domain,\n    analysisDate: competitor.analysisDate,\n    websiteSummary,\n    recentNews,\n    fundraisingAlerts: fundraisingNews.length > 0,\n    fundraisingNews,\n    linkedinPosts: topPosts,\n    jobPostings: {\n      total: jobs.length,\n      byDepartment: jobsByDept,\n      isHiringAggressively: jobs.length > 5\n    },\n    signals: [\n      ...(fundraisingNews.length > 0 ? ['🚨 Possible levée de fonds/acquisition'] : []),\n      ...(jobs.length > 10 ? ['📈 Recrutement intense (' + jobs.length + ' postes)'] : []),\n      ...(recentNews.length > 3 ? ['📰 Forte activité presse'] : [])\n    ]\n  }\n}];"
+      },
+      "id": "aggregate-intel",
+      "name": "🔗 Agréger Intelligence Concurrentielle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 340]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "allCompetitors",
+        "include": "allFields"
+      },
+      "id": "aggregate-all",
+      "name": "📦 Agréger Tous les Concurrents",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un analyste stratégique senior spécialisé en veille concurrentielle. Tu fournis des insights actionnables pour aider les entreprises à devancer leurs concurrents."
+            },
+            {
+              "role": "user",
+              "content": "=Analyse cette intelligence concurrentielle de la semaine:\n\n{{ JSON.stringify($json.allCompetitors, null, 2) }}\n\nFournis:\n1. **Résumé exécutif** (3-4 points clés)\n2. **Signaux d'alerte critiques** (fundraising, gros recrutements, nouveaux produits)\n3. **Mouvements stratégiques** de chaque concurrent\n4. **Opportunités identifiées** à exploiter rapidement\n5. **Recommandations d'actions** cette semaine (priorisées)\n6. **Score de menace** pour chaque concurrent (1-10)\n\nSois précis, actionnable et orienté résultats business."
+            }
+          ]
+        },
+        "options": { "maxTokens": 2000 }
+      },
+      "id": "ai-analysis",
+      "name": "🤖 Analyse IA Stratégique",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.airtable.com/v0/{{ $vars.AIRTABLE_BASE_ID }}/Veille_Concurrentielle",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $vars.AIRTABLE_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"fields\": {\n    \"Semaine\": \"{{ new Date().toISOString().split('T')[0] }}\",\n    \"Analyse\": {{ JSON.stringify($('🤖 Analyse IA Stratégique').item.json.message?.content || '') }},\n    \"Concurrents_Surveillés\": {{ $json.allCompetitors.length }},\n    \"Alertes_Critiques\": {{ $json.allCompetitors.filter(c => c.fundraisingAlerts || c.jobPostings?.isHiringAggressively).length }},\n    \"Données_Brutes\": {{ JSON.stringify($json.allCompetitors) }}\n  }\n}"
+      },
+      "id": "save-airtable",
+      "name": "💾 Sauvegarder dans Airtable",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"🕵️ Rapport Veille Concurrentielle - \" + new Date().toLocaleDateString('fr-FR') }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*\" + $('📦 Agréger Tous les Concurrents').item.json.allCompetitors.length + \" concurrents analysés*\\n\\n\" + ($('🤖 Analyse IA Stratégique').item.json.message?.content || '').substring(0, 1200)\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Alertes critiques:* \" + $('📦 Agréger Tous les Concurrents').item.json.allCompetitors.filter(c => c.fundraisingAlerts).map(c => '🚨 ' + c.competitor).join(', ')\n      }\n    }\n  ]\n}"
+      },
+      "id": "slack-report",
+      "name": "💬 Rapport Slack Hebdomadaire",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 480]
+    }
+  ],
+  "connections": {
+    "⏰ Déclencheur Hebdomadaire Lundi": {
+      "main": [[{ "node": "📋 Charger Liste des Concurrents", "type": "main", "index": 0 }]]
+    },
+    "📋 Charger Liste des Concurrents": {
+      "main": [
+        [
+          { "node": "🕸️ Scraper Site Concurrent (Apify)", "type": "main", "index": 0 },
+          { "node": "📰 Monitoring Presse & Mentions", "type": "main", "index": 0 },
+          { "node": "💼 Posts LinkedIn Concurrent", "type": "main", "index": 0 },
+          { "node": "💼 Offres d'Emploi Concurrent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🕸️ Scraper Site Concurrent (Apify)": {
+      "main": [[{ "node": "🔗 Agréger Intelligence Concurrentielle", "type": "main", "index": 0 }]]
+    },
+    "📰 Monitoring Presse & Mentions": {
+      "main": [[{ "node": "🔗 Agréger Intelligence Concurrentielle", "type": "main", "index": 1 }]]
+    },
+    "💼 Posts LinkedIn Concurrent": {
+      "main": [[{ "node": "🔗 Agréger Intelligence Concurrentielle", "type": "main", "index": 2 }]]
+    },
+    "💼 Offres d'Emploi Concurrent": {
+      "main": [[{ "node": "🔗 Agréger Intelligence Concurrentielle", "type": "main", "index": 3 }]]
+    },
+    "🔗 Agréger Intelligence Concurrentielle": {
+      "main": [[{ "node": "📦 Agréger Tous les Concurrents", "type": "main", "index": 0 }]]
+    },
+    "📦 Agréger Tous les Concurrents": {
+      "main": [[{ "node": "🤖 Analyse IA Stratégique", "type": "main", "index": 0 }]]
+    },
+    "🤖 Analyse IA Stratégique": {
+      "main": [
+        [
+          { "node": "💾 Sauvegarder dans Airtable", "type": "main", "index": 0 },
+          { "node": "💬 Rapport Slack Hebdomadaire", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "competitive-intelligence" }, { "name": "veille" }]
+}
