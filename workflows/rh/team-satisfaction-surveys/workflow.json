@@ -1,13 +1,164 @@
 {
-  "name": "Team Satisfaction Surveys",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["hr","surveys","satisfaction","culture"],
-  "meta": {
-    "description": "Automated regular pulse surveys (weekly/monthly) sent via Slack/email. Anonymous responses on morale, workload, team relationships, management feedback, and improvement suggestions. AI compiles results, detects warning signals (burnout, overload, conflicts), and generates manager reports.",
-    "difficulty": "⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Enquêtes Satisfaction Équipes et Analyse Sentiment",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Enquêtes Satisfaction Équipes\n\n**Objectif:** Envoyer des enquêtes NPS et satisfaction mensuelles, analyser les résultats avec IA, générer des rapports et alerter sur les signaux d'alarme.\n\n**Déclencheur:** 1er de chaque mois à 9h\n\n**Variables requises:**\n- OPENAI_API_KEY\n- SENDGRID_API_KEY\n- GOOGLE_SHEETS_ID_RH\n- SLACK_WEBHOOK_URL_RH\n- TYPEFORM_API_KEY",
+        "height": 260,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 1 * *" }]
+        }
+      },
+      "id": "monthly-trigger",
+      "name": "1er du Mois 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_RH}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Employés", "__rl": true, "mode": "name" }
+      },
+      "id": "get-employees",
+      "name": "Liste Employés",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Créer lien Typeform personnalisé pour chaque employé\nconst employees = $input.all();\nconst month = new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });\n\nreturn employees.map(emp => ({\n  json: {\n    ...emp.json,\n    surveyUrl: `https://form.typeform.com/to/${process.env.TYPEFORM_FORM_ID}#email=${encodeURIComponent(emp.json.Email)}&nom=${encodeURIComponent(emp.json.Nom)}&mois=${encodeURIComponent(month)}`,\n    month\n  }\n}));"
+      },
+      "id": "create-survey-links",
+      "name": "Créer Liens Enquête",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.Email }}\", \"name\": \"{{ $json.Prénom }}\"}]}], \"from\": {\"email\": \"{{$vars.RH_EMAIL}}\", \"name\": \"Équipe RH\"}, \"subject\": \"Votre enquête satisfaction {{ $json.month }} - 2 minutes de votre temps\", \"content\": [{\"type\": \"text/html\", \"value\": \"<p>Bonjour {{ $json.Prénom }},</p><p>Votre avis compte! Prenez 2 minutes pour partager votre ressenti ce mois-ci.</p><p><a href='{{ $json.surveyUrl }}' style='background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;'>Répondre à l'enquête</a></p><p>Merci pour votre contribution,<br>L'équipe RH</p>\"}]}"
+      },
+      "id": "send-surveys",
+      "name": "Envoyer Enquêtes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 8 * *" }]
+        }
+      },
+      "id": "analyze-trigger",
+      "name": "Analyse J+7",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 520]
+    },
+    {
+      "parameters": {
+        "url": "https://api.typeform.com/forms/{{$vars.TYPEFORM_FORM_ID}}/responses",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.TYPEFORM_API_KEY}}" }]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "since", "value": "=30d" }, { "name": "page_size", "value": "200" }]
+        }
+      },
+      "id": "fetch-responses",
+      "name": "Récupérer Réponses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst responses = data.items || [];\n\nconst scores = responses.map(r => {\n  const npsAnswer = r.answers?.find(a => a.field?.id === 'nps_score');\n  const satisfactionAnswer = r.answers?.find(a => a.field?.id === 'satisfaction');\n  const commentAnswer = r.answers?.find(a => a.field?.id === 'commentaire');\n  \n  return {\n    nps: npsAnswer?.number || 0,\n    satisfaction: satisfactionAnswer?.number || 0,\n    commentaire: commentAnswer?.text || ''\n  };\n});\n\nconst avgNps = scores.reduce((s, r) => s + r.nps, 0) / scores.length || 0;\nconst avgSatisfaction = scores.reduce((s, r) => s + r.satisfaction, 0) / scores.length || 0;\nconst promoteurs = scores.filter(r => r.nps >= 9).length;\nconst detracteurs = scores.filter(r => r.nps <= 6).length;\nconst npsScore = Math.round((promoteurs - detracteurs) / scores.length * 100);\nconst comments = scores.filter(r => r.commentaire).map(r => r.commentaire);\n\nreturn [{\n  json: {\n    totalReponses: scores.length,\n    avgNps: Math.round(avgNps * 10) / 10,\n    avgSatisfaction: Math.round(avgSatisfaction * 10) / 10,\n    npsScore,\n    promoteurs,\n    detracteurs,\n    comments: comments.join('\\n---\\n'),\n    needsAlert: npsScore < 20 || avgSatisfaction < 3\n  }\n}];"
+      },
+      "id": "calculate-stats",
+      "name": "Calculer Statistiques",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 520]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es expert en engagement employé et bien-être au travail. Analyse les résultats d'enquête et identifie les tendances, problèmes et recommandations.\"},{\"role\":\"user\",\"content\":\"Analyse ces résultats d'enquête satisfaction:\\n\\nNPS Score: \" + $json.npsScore + \"\\nSatisfaction moyenne: \" + $json.avgSatisfaction + \"/5\\nNombre de réponses: \" + $json.totalReponses + \"\\nPromoteurs: \" + $json.promoteurs + \"\\nDétracteurs: \" + $json.detracteurs + \"\\n\\nCommentaires des employés:\\n\" + $json.comments + \"\\n\\nFournis:\\n1. Analyse des tendances (3-4 paragraphes)\\n2. Points positifs à maintenir\\n3. Points d'amélioration prioritaires\\n4. Actions recommandées concrètes\\n5. Niveau d'alerte: vert/orange/rouge\"}]"
+            },
+            { "name": "max_tokens", "value": "800" }
+          ]
+        }
+      },
+      "id": "analyze-sentiment",
+      "name": "IA Analyse Sentiment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 520]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL_RH}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=📊 *Rapport Satisfaction Équipes - {{ new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) }}*\n\n*NPS Score:* {{ $('Calculer Statistiques').first().json.npsScore }}\n*Satisfaction moyenne:* {{ $('Calculer Statistiques').first().json.avgSatisfaction }}/5\n*Réponses reçues:* {{ $('Calculer Statistiques').first().json.totalReponses }}\n\n*Analyse IA:*\n{{ $json.choices[0].message.content }}"
+            }
+          ]
+        }
+      },
+      "id": "slack-report",
+      "name": "Rapport Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 520]
+    }
+  ],
+  "connections": {
+    "1er du Mois 9h": { "main": [[{ "node": "Liste Employés", "type": "main", "index": 0 }]] },
+    "Liste Employés": { "main": [[{ "node": "Créer Liens Enquête", "type": "main", "index": 0 }]] },
+    "Créer Liens Enquête": { "main": [[{ "node": "Envoyer Enquêtes", "type": "main", "index": 0 }]] },
+    "Analyse J+7": { "main": [[{ "node": "Récupérer Réponses", "type": "main", "index": 0 }]] },
+    "Récupérer Réponses": { "main": [[{ "node": "Calculer Statistiques", "type": "main", "index": 0 }]] },
+    "Calculer Statistiques": { "main": [[{ "node": "IA Analyse Sentiment", "type": "main", "index": 0 }]] },
+    "IA Analyse Sentiment": { "main": [[{ "node": "Rapport Slack", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "satisfaction" }, { "name": "analytics" }]
 }
