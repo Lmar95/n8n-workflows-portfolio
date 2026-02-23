@@ -1,0 +1,150 @@
+{
+  "name": "Routage Intelligent Tickets Support et Triage IA",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🎫 Routage Tickets Support\n\n**Objectif:** Trier, classer et router automatiquement les tickets support vers le bon agent selon l'urgence, le type et l'expertise requise.\n\n**Déclencheur:** Nouveau ticket email/Intercom/formulaire\n\n**Variables requises:**\n- OPENAI_API_KEY\n- INTERCOM_API_KEY ou ZENDESK_API_KEY\n- SLACK_BOT_TOKEN\n- SENDGRID_API_KEY",
+        "height": 240,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-ticket",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Nouveau Ticket",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "support-ticket-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es un système de triage de support client expert. Analyse les tickets et classe-les précisément.\"},{\"role\":\"user\",\"content\":\"Analyse ce ticket de support:\\n\\nSujet: \" + $json.subject + \"\\nMessage: \" + $json.message + \"\\nClient: \" + ($json.client_name || 'Inconnu') + \"\\nPlan: \" + ($json.plan || 'Standard') + \"\\n\\nRetourne un JSON avec:\\n- urgence: 'critique' | 'haute' | 'moyenne' | 'basse'\\n- categorie: 'bug' | 'facturation' | 'compte' | 'produit' | 'autre'\\n- equipe: 'technique' | 'support' | 'commercial' | 'finance'\\n- resume: résumé en 1 phrase\\n- reponse_auto: réponse automatique appropriée (si non urgent)\\n- action_requise: description action humaine si nécessaire\\n- score_satisfaction_risque: 1-10 (10 = risque élevé de churn)\"}]"
+            },
+            { "name": "max_tokens", "value": "700" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "analyze-ticket",
+      "name": "IA Analyse Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst ticket = $node['Webhook Nouveau Ticket'].first().json;\n\nlet analysis;\ntry {\n  analysis = JSON.parse(response.choices[0].message.content);\n} catch (e) {\n  analysis = { urgence: 'moyenne', categorie: 'autre', equipe: 'support', resume: ticket.subject, reponse_auto: '', score_satisfaction_risque: 5 };\n}\n\nconst ticketId = `TKT-${Date.now().toString(36).toUpperCase()}`;\n\n// Mapping équipe -> canal Slack\nconst slackChannels = {\n  'technique': process.env.SLACK_CHANNEL_TECH || '#support-technique',\n  'support': process.env.SLACK_CHANNEL_SUPPORT || '#support',\n  'commercial': process.env.SLACK_CHANNEL_COMMERCIAL || '#commercial',\n  'finance': process.env.SLACK_CHANNEL_FINANCE || '#finance'\n};\n\nreturn [{\n  json: {\n    ...ticket,\n    ...analysis,\n    ticketId,\n    slackChannel: slackChannels[analysis.equipe] || '#support',\n    priority: analysis.urgence === 'critique' ? 1 : analysis.urgence === 'haute' ? 2 : analysis.urgence === 'moyenne' ? 3 : 4,\n    dateCreation: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "classify-ticket",
+      "name": "Classifier Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.urgence }}",
+              "rightValue": "critique",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-critical",
+      "name": "Ticket Critique?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SLACK_BOT_TOKEN}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"channel\": \"{{ $json.slackChannel }}\", \"text\": \"{{ $json.urgence === 'critique' ? '🚨 TICKET CRITIQUE' : '📋 Nouveau ticket' }}\", \"blocks\": [{\"type\": \"section\", \"text\": {\"type\": \"mrkdwn\", \"text\": \"*[{{ $json.ticketId }}] {{ $json.resume }}*\\n*Urgence:* {{ $json.urgence }} | *Catégorie:* {{ $json.categorie }}\\n*Client:* {{ $json.client_name || 'Inconnu' }} ({{ $json.plan || 'Standard' }})\\n*Risque churn:* {{ $json.score_satisfaction_risque }}/10\"}}]}"
+      },
+      "id": "slack-route",
+      "name": "Router vers Équipe Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.client_email }}\"}]}], \"from\": {\"email\": \"{{$vars.SUPPORT_EMAIL}}\", \"name\": \"Support {{$vars.COMPANY_NAME}}\"}, \"subject\": \"Re: {{ $json.subject }} [{{ $json.ticketId }}]\", \"content\": [{\"type\": \"text/html\", \"value\": \"<p>Bonjour,</p><p>Nous avons bien reçu votre demande (référence: <strong>{{ $json.ticketId }}</strong>).</p>{{ $json.reponse_auto ? '<p>' + $json.reponse_auto + '</p>' : '' }}<p>Notre équipe {{ $json.equipe }} prendra en charge votre demande dans les délais suivants:</p><ul><li>Critique: 1h</li><li>Haute: 4h</li><li>Normale: 24h</li></ul><p>Cordialement,<br>L'équipe Support</p>\"}]}"
+      },
+      "id": "ack-email",
+      "name": "Email Confirmation Client",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"ticketId\": \"{{ $json.ticketId }}\", \"urgence\": \"{{ $json.urgence }}\", \"equipe\": \"{{ $json.equipe }}\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1640, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Nouveau Ticket": { "main": [[{ "node": "IA Analyse Ticket", "type": "main", "index": 0 }]] },
+    "IA Analyse Ticket": { "main": [[{ "node": "Classifier Ticket", "type": "main", "index": 0 }]] },
+    "Classifier Ticket": { "main": [[{ "node": "Ticket Critique?", "type": "main", "index": 0 }]] },
+    "Ticket Critique?": {
+      "main": [
+        [
+          { "node": "Router vers Équipe Slack", "type": "main", "index": 0 },
+          { "node": "Email Confirmation Client", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Router vers Équipe Slack", "type": "main", "index": 0 },
+          { "node": "Email Confirmation Client", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Router vers Équipe Slack": { "main": [[{ "node": "Réponse", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "support" }, { "name": "tickets" }]
+}
