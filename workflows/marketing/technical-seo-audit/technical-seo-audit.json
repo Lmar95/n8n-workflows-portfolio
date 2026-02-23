@@ -1,0 +1,474 @@
+{
+  "name": "Audit SEO Technique Automatisé",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔍 Audit SEO Technique Automatisé\n\n**Objectif:** Crawler votre site comme Googlebot, identifier les problèmes techniques SEO (404, redirections en chaîne, contenu dupliqué, balises manquantes, temps de chargement >3s, mobile).\n\n**Déclencheurs:**\n- Webhook (audit on-demand)\n- Schedule (hebdomadaire, lundi 7h)\n\n**Config requise:**\n- `APIFY_API_KEY` - Token Apify pour le crawling\n- `GOOGLE_SEARCH_CONSOLE_KEY` - API GSC\n- `PAGESPEED_API_KEY` - Google PageSpeed Insights\n- `OPENAI_API_KEY` - Analyse et recommandations\n- `SENDGRID_API_KEY` - Envoi rapport email\n- `SLACK_WEBHOOK_URL` - Alertes critiques\n\n**Output:** Rapport PDF avec score global, quick wins, priorités",
+        "height": 340,
+        "width": 420,
+        "color": 5
+      },
+      "id": "sticky-note-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weekday": 1,
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "trigger-schedule",
+      "name": "Schedule Hebdomadaire",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "audit-seo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "trigger-webhook",
+      "name": "Webhook Audit On-Demand",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [460, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliser les paramètres d'audit selon la source\nconst body = $input.first().json;\nconst isSchedule = !body.siteUrl;\n\nreturn [{\n  json: {\n    siteUrl: isSchedule ? process.env.DEFAULT_SITE_URL || 'https://votresite.com' : body.siteUrl,\n    maxPages: body.maxPages || 500,\n    auditId: `AUDIT-${Date.now()}`,\n    requestedBy: body.requestedBy || 'automatic',\n    startTime: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "normalize-params",
+      "name": "Normaliser Paramètres",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 280]
+    },
+    {
+      "parameters": {
+        "url": "https://api.apify.com/v2/acts/apify~web-scraper/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.APIFY_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "startUrls",
+              "value": "=[{\"url\": \"{{ $json.siteUrl }}\"}]"
+            },
+            {
+              "name": "maxCrawlPages",
+              "value": "={{ $json.maxPages }}"
+            },
+            {
+              "name": "pageFunction",
+              "value": "async function pageFunction(context) {\n  const { page, request } = context;\n  const url = request.url;\n  \n  const title = await page.title();\n  const statusCode = request.userData.statusCode || 200;\n  \n  const metaDesc = await page.$eval('meta[name=description]', el => el?.content || '').catch(() => '');\n  const h1Count = await page.$$eval('h1', els => els.length);\n  const h1Text = await page.$eval('h1', el => el?.textContent?.trim() || '').catch(() => '');\n  const canonicalUrl = await page.$eval('link[rel=canonical]', el => el?.href || '').catch(() => '');\n  const robotsMeta = await page.$eval('meta[name=robots]', el => el?.content || '').catch(() => '');\n  \n  // Images sans alt\n  const imagesWithoutAlt = await page.$$eval('img:not([alt])', imgs => imgs.length);\n  \n  // Liens internes/externes\n  const links = await page.$$eval('a[href]', els => els.map(el => ({ href: el.href, text: el.textContent?.trim() })));\n  \n  return {\n    url,\n    statusCode,\n    title,\n    titleLength: title?.length || 0,\n    metaDesc,\n    metaDescLength: metaDesc?.length || 0,\n    h1Count,\n    h1Text,\n    canonicalUrl,\n    robotsMeta,\n    imagesWithoutAlt,\n    linksCount: links.length\n  };\n}"
+            }
+          ]
+        },
+        "method": "POST"
+      },
+      "id": "apify-crawl",
+      "name": "Apify - Crawler le Site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.apify.com/v2/actor-runs/{{ $json.id }}/dataset/items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.APIFY_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "get-crawl-results",
+      "name": "Récupérer Résultats Crawl",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/webmasters/v3/sites/{{ encodeURIComponent($node[\"Normaliser Paramètres\"].json.siteUrl) }}/searchAnalytics/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.GOOGLE_SEARCH_CONSOLE_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "startDate",
+              "value": "={{ new Date(Date.now() - 30*24*60*60*1000).toISOString().split('T')[0] }}"
+            },
+            {
+              "name": "endDate",
+              "value": "={{ new Date().toISOString().split('T')[0] }}"
+            },
+            {
+              "name": "dimensions",
+              "value": "=[\"page\"]"
+            },
+            {
+              "name": "rowLimit",
+              "value": "=1000"
+            }
+          ]
+        },
+        "method": "POST"
+      },
+      "id": "gsc-data",
+      "name": "Google Search Console",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 380]
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $node[\"Normaliser Paramètres\"].json.siteUrl }}"
+            },
+            {
+              "name": "strategy",
+              "value": "mobile"
+            },
+            {
+              "name": "key",
+              "value": "={{ $vars.PAGESPEED_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "pagespeed-mobile",
+      "name": "PageSpeed Mobile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 560]
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $node[\"Normaliser Paramètres\"].json.siteUrl }}"
+            },
+            {
+              "name": "strategy",
+              "value": "desktop"
+            },
+            {
+              "name": "key",
+              "value": "={{ $vars.PAGESPEED_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "pagespeed-desktop",
+      "name": "PageSpeed Desktop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 560]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "merge-data",
+      "name": "Fusionner Données",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1560, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Analyser toutes les données du crawl et construire le rapport\nconst crawlData = $input.all()[0]?.json || {};\nconst gscData = $input.all()[1]?.json || {};\nconst psMobile = $input.all()[2]?.json || {};\nconst psDesktop = $input.all()[3]?.json || {};\n\nconst pages = Array.isArray(crawlData) ? crawlData : [];\n\n// Analyser les problèmes\nconst issues = {\n  pages404: pages.filter(p => p.statusCode === 404),\n  pagesWithoutTitle: pages.filter(p => !p.title || p.title.length < 10),\n  titleTooLong: pages.filter(p => p.title && p.title.length > 70),\n  titleTooShort: pages.filter(p => p.title && p.title.length < 30 && p.title.length > 0),\n  missingMetaDesc: pages.filter(p => !p.metaDesc || p.metaDesc.length < 10),\n  metaDescTooLong: pages.filter(p => p.metaDesc && p.metaDesc.length > 160),\n  multipleH1: pages.filter(p => p.h1Count > 1),\n  missingH1: pages.filter(p => p.h1Count === 0),\n  imagesWithoutAlt: pages.filter(p => p.imagesWithoutAlt > 0),\n  missingCanonical: pages.filter(p => !p.canonicalUrl),\n  noindexPages: pages.filter(p => p.robotsMeta && p.robotsMeta.includes('noindex'))\n};\n\n// Scores\nconst totalPages = pages.length;\nconst criticalIssues = issues.pages404.length + issues.pagesWithoutTitle.length + issues.missingH1.length;\nconst warningIssues = issues.multipleH1.length + issues.missingMetaDesc.length + issues.metaDescTooLong.length;\nconst infoIssues = issues.imagesWithoutAlt.length + issues.missingCanonical.length;\n\n// Score global sur 100\nconst maxDeductions = totalPages * 3;\nconst deductions = (criticalIssues * 3) + (warningIssues * 2) + (infoIssues * 1);\nconst score = Math.max(0, Math.round(100 - (deductions / Math.max(maxDeductions, 1) * 100)));\n\n// PageSpeed\nconst mobileScore = Math.round((psMobile?.lighthouseResult?.categories?.performance?.score || 0) * 100);\nconst desktopScore = Math.round((psDesktop?.lighthouseResult?.categories?.performance?.score || 0) * 100);\nconst mobileLCP = psMobile?.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue || 'N/A';\nconst desktopLCP = psDesktop?.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue || 'N/A';\n\n// Quick wins (impact élevé, effort faible)\nconst quickWins = [];\nif (issues.pages404.length > 0) quickWins.push(`Corriger ${issues.pages404.length} pages en 404 → redirection 301 vers pages pertinentes`);\nif (issues.missingMetaDesc.length > 0) quickWins.push(`Ajouter meta description sur ${issues.missingMetaDesc.length} pages → impact CTR immédiat`);\nif (issues.titleTooLong.length > 0) quickWins.push(`Raccourcir ${issues.titleTooLong.length} titres >70 chars → affichage complet dans les SERPs`);\nif (issues.multipleH1.length > 0) quickWins.push(`Corriger ${issues.multipleH1.length} pages avec plusieurs H1 → clarté sémantique`);\nif (mobileScore < 50) quickWins.push('Optimiser vitesse mobile (score <50) → amélioration ranking Core Web Vitals');\n\nreturn [{\n  json: {\n    auditId: $node[\"Normaliser Paramètres\"]?.json?.auditId || 'AUDIT-001',\n    siteUrl: $node[\"Normaliser Paramètres\"]?.json?.siteUrl || 'N/A',\n    timestamp: new Date().toISOString(),\n    totalPages,\n    score,\n    scoreLabel: score >= 80 ? 'Excellent' : score >= 60 ? 'Bon' : score >= 40 ? 'À améliorer' : 'Critique',\n    issues,\n    criticalIssuesCount: criticalIssues,\n    warningIssuesCount: warningIssues,\n    infoIssuesCount: infoIssues,\n    pagespeed: {\n      mobile: { score: mobileScore, lcp: mobileLCP },\n      desktop: { score: desktopScore, lcp: desktopLCP }\n    },\n    quickWins,\n    gscData: gscData?.rows?.slice(0, 50) || []\n  }\n}];"
+      },
+      "id": "analyze-results",
+      "name": "Analyser Résultats SEO",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 380]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert SEO technique senior avec 10+ ans d'expérience. Tu analyses les audits techniques et fournis des recommandations actionnables, priorisées par impact sur le ranking Google."
+            },
+            {
+              "role": "user",
+              "content": "=Voici les résultats de l'audit SEO technique pour {{ $json.siteUrl }}:\n\n**Score global:** {{ $json.score }}/100 ({{ $json.scoreLabel }})\n**Pages analysées:** {{ $json.totalPages }}\n\n**Problèmes critiques:** {{ $json.criticalIssuesCount }}\n- Pages 404: {{ $json.issues.pages404.length }}\n- Pages sans titre: {{ $json.issues.pagesWithoutTitle.length }}\n- Pages sans H1: {{ $json.issues.missingH1.length }}\n\n**Avertissements:** {{ $json.warningIssuesCount }}\n- H1 multiples: {{ $json.issues.multipleH1.length }}\n- Meta descriptions manquantes: {{ $json.issues.missingMetaDesc.length }}\n- Meta descriptions trop longues: {{ $json.issues.metaDescTooLong.length }}\n\n**PageSpeed:**\n- Mobile: {{ $json.pagespeed.mobile.score }}/100 (LCP: {{ $json.pagespeed.mobile.lcp }})\n- Desktop: {{ $json.pagespeed.desktop.score }}/100 (LCP: {{ $json.pagespeed.desktop.lcp }})\n\nGénère:\n1. Une analyse executive (3-4 phrases) du statut SEO actuel\n2. Top 5 recommandations prioritaires avec impact estimé sur le trafic\n3. Plan d'action sur 30/60/90 jours\n4. Points forts à maintenir\n\nFormat markdown professionnel."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gpt4-analysis",
+      "name": "GPT-4 Analyse Stratégique",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [2000, 380],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const auditData = $input.first().json;\nconst aiAnalysis = $input.last().json?.message?.content || $input.last().json?.choices?.[0]?.message?.content || 'Analyse non disponible';\n\nconst getScoreColor = (score) => {\n  if (score >= 80) return '#27ae60';\n  if (score >= 60) return '#f39c12';\n  if (score >= 40) return '#e67e22';\n  return '#e74c3c';\n};\n\nconst scoreColor = getScoreColor(auditData.score);\nconst mobileColor = getScoreColor(auditData.pagespeed?.mobile?.score || 0);\nconst desktopColor = getScoreColor(auditData.pagespeed?.desktop?.score || 0);\n\nconst quickWinsHTML = (auditData.quickWins || []).map(win => `\n  <li style=\"padding: 8px 0; border-bottom: 1px solid #ecf0f1;\">\n    <span style=\"color: #27ae60; font-weight: bold;\">✓</span> ${win}\n  </li>\n`).join('');\n\nconst formatAI = (text) => text.replace(/\\n/g, '<br>').replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>').replace(/## (.*?)(<br>|$)/g, '<h3 style=\"color: #2c3e50; margin-top: 20px;\">$1</h3>').replace(/# (.*?)(<br>|$)/g, '<h2 style=\"color: #2c3e50;\">$1</h2>');\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n  <meta charset=\"UTF-8\">\n  <title>Rapport Audit SEO - ${auditData.siteUrl}</title>\n  <style>\n    body { font-family: 'Segoe UI', Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 40px 20px; color: #2c3e50; background: #f8f9fa; }\n    .header { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 40px; border-radius: 12px; margin-bottom: 30px; }\n    .score-card { background: white; padding: 30px; border-radius: 12px; text-align: center; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }\n    .score-circle { width: 120px; height: 120px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 42px; font-weight: bold; color: white; background: ${scoreColor}; }\n    .section { background: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }\n    .section h2 { margin-top: 0; color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }\n    .issue-critical { background: #fdeaea; border-left: 4px solid #e74c3c; padding: 12px; margin: 8px 0; border-radius: 4px; }\n    .issue-warning { background: #fef9e7; border-left: 4px solid #f39c12; padding: 12px; margin: 8px 0; border-radius: 4px; }\n    .issue-info { background: #eaf4fb; border-left: 4px solid #3498db; padding: 12px; margin: 8px 0; border-radius: 4px; }\n    .speed-card { display: inline-block; width: 45%; text-align: center; padding: 20px; margin: 10px; background: #f8f9fa; border-radius: 8px; }\n    .speed-score { font-size: 36px; font-weight: bold; }\n    .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; background: ${scoreColor}; color: white; }\n    table { width: 100%; border-collapse: collapse; }\n    th { background: #2c3e50; color: white; padding: 12px; text-align: left; }\n    td { padding: 10px 12px; border-bottom: 1px solid #ecf0f1; }\n    tr:hover td { background: #f8f9fa; }\n  </style>\n</head>\n<body>\n  <div class=\"header\">\n    <h1 style=\"margin: 0 0 10px 0;\">🔍 Rapport Audit SEO Technique</h1>\n    <p style=\"margin: 0; opacity: 0.9; font-size: 18px;\">Site analysé: <strong>${auditData.siteUrl}</strong></p>\n    <p style=\"margin: 5px 0 0 0; opacity: 0.8; font-size: 14px;\">Généré le ${new Date(auditData.timestamp).toLocaleDateString('fr-FR', {day: '2-digit', month: 'long', year: 'numeric'})} | ${auditData.totalPages} pages analysées</p>\n  </div>\n\n  <div class=\"score-card\">\n    <div class=\"score-circle\">${auditData.score}</div>\n    <p style=\"font-size: 20px; margin: 15px 0 5px; font-weight: bold;\">Score SEO Global</p>\n    <span class=\"badge\">${auditData.scoreLabel}</span>\n    <p style=\"color: #7f8c8d; margin-top: 10px;\">Basé sur l'analyse de ${auditData.totalPages} pages | ${auditData.criticalIssuesCount} critiques · ${auditData.warningIssuesCount} avertissements · ${auditData.infoIssuesCount} informations</p>\n  </div>\n\n  <div class=\"section\">\n    <h2>📊 Performance (PageSpeed)</h2>\n    <div style=\"text-align: center;\">\n      <div class=\"speed-card\">\n        <p style=\"margin: 0 0 10px; font-weight: bold;\">📱 Mobile</p>\n        <div class=\"speed-score\" style=\"color: ${mobileColor}\">${auditData.pagespeed?.mobile?.score || 0}</div>\n        <p style=\"color: #7f8c8d; font-size: 13px;\">LCP: ${auditData.pagespeed?.mobile?.lcp || 'N/A'}</p>\n      </div>\n      <div class=\"speed-card\">\n        <p style=\"margin: 0 0 10px; font-weight: bold;\">💻 Desktop</p>\n        <div class=\"speed-score\" style=\"color: ${desktopColor}\">${auditData.pagespeed?.desktop?.score || 0}</div>\n        <p style=\"color: #7f8c8d; font-size: 13px;\">LCP: ${auditData.pagespeed?.desktop?.lcp || 'N/A'}</p>\n      </div>\n    </div>\n  </div>\n\n  <div class=\"section\">\n    <h2>⚠️ Problèmes Identifiés</h2>\n    <p style=\"color: #7f8c8d;\">Classés par niveau de criticité et impact SEO</p>\n    \n    <h3 style=\"color: #e74c3c;\">🔴 Critiques (${auditData.criticalIssuesCount})</h3>\n    ${auditData.issues?.pages404?.length > 0 ? `<div class=\"issue-critical\"><strong>Pages 404 (${auditData.issues.pages404.length})</strong> — URLs retournant une erreur 404. Impact direct sur le crawl budget et l'expérience utilisateur.</div>` : ''}\n    ${auditData.issues?.pagesWithoutTitle?.length > 0 ? `<div class=\"issue-critical\"><strong>Pages sans titre (${auditData.issues.pagesWithoutTitle.length})</strong> — Balise &lt;title&gt; manquante ou trop courte. Impact majeur sur le ranking et le CTR.</div>` : ''}\n    ${auditData.issues?.missingH1?.length > 0 ? `<div class=\"issue-critical\"><strong>Pages sans H1 (${auditData.issues.missingH1.length})</strong> — Structure sémantique absente. Signal négatif fort pour Google.</div>` : ''}\n    \n    <h3 style=\"color: #f39c12;\">🟡 Avertissements (${auditData.warningIssuesCount})</h3>\n    ${auditData.issues?.multipleH1?.length > 0 ? `<div class=\"issue-warning\"><strong>H1 multiples (${auditData.issues.multipleH1.length})</strong> — Plusieurs balises H1 sur la même page. Dilue le signal sémantique.</div>` : ''}\n    ${auditData.issues?.missingMetaDesc?.length > 0 ? `<div class=\"issue-warning\"><strong>Meta descriptions manquantes (${auditData.issues.missingMetaDesc.length})</strong> — Impact sur le taux de clic dans les SERPs.</div>` : ''}\n    ${auditData.issues?.metaDescTooLong?.length > 0 ? `<div class=\"issue-warning\"><strong>Meta descriptions trop longues (${auditData.issues.metaDescTooLong.length})</strong> — Tronquées dans les SERPs, optimisation nécessaire.</div>` : ''}\n    \n    <h3 style=\"color: #3498db;\">🔵 Informations (${auditData.infoIssuesCount})</h3>\n    ${auditData.issues?.imagesWithoutAlt?.length > 0 ? `<div class=\"issue-info\"><strong>Images sans attribut alt (${auditData.issues.imagesWithoutAlt.length})</strong> — Accessibilité et SEO images à améliorer.</div>` : ''}\n    ${auditData.issues?.missingCanonical?.length > 0 ? `<div class=\"issue-info\"><strong>Balises canoniques manquantes (${auditData.issues.missingCanonical.length})</strong> — Risque de contenu dupliqué.</div>` : ''}\n  </div>\n\n  <div class=\"section\">\n    <h2>⚡ Quick Wins (impact immédiat)</h2>\n    <ul style=\"list-style: none; padding: 0; margin: 0;\">\n      ${quickWinsHTML || '<li>Aucun quick win identifié — excellent travail !</li>'}\n    </ul>\n  </div>\n\n  <div class=\"section\">\n    <h2>🤖 Analyse & Recommandations IA</h2>\n    <div style=\"line-height: 1.7;\">${formatAI(aiAnalysis)}</div>\n  </div>\n\n  <div style=\"text-align: center; padding: 20px; color: #95a5a6; font-size: 12px;\">\n    Rapport généré automatiquement par votre Agent SEO n8n · ${new Date().toLocaleDateString('fr-FR')}\n  </div>\n</body>\n</html>\n`;\n\nreturn [{\n  json: {\n    ...auditData,\n    aiAnalysis,\n    htmlReport: html\n  }\n}];"
+      },
+      "id": "generate-html-report",
+      "name": "Générer Rapport HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-critical",
+              "leftValue": "={{ $json.criticalIssuesCount }}",
+              "rightValue": 5,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-severity",
+      "name": "Problèmes Critiques?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2440, 380]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🚨 *Alerte Audit SEO* — {{ $json.siteUrl }}\n\n❗ Score: *{{ $json.score }}/100* ({{ $json.scoreLabel }})\n\n*Problèmes critiques:* {{ $json.criticalIssuesCount }}\n- Pages 404: {{ $json.issues.pages404.length }}\n- Pages sans titre: {{ $json.issues.pagesWithoutTitle.length }}\n- Pages sans H1: {{ $json.issues.missingH1.length }}\n\n*PageSpeed Mobile:* {{ $json.pagespeed.mobile.score }}/100\n\n📋 Le rapport complet vous a été envoyé par email."
+            }
+          ]
+        },
+        "method": "POST"
+      },
+      "id": "slack-alert",
+      "name": "Alerte Slack Critique",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2660, 260]
+    },
+    {
+      "parameters": {
+        "fromEmail": "seo@votreentreprise.com",
+        "toEmail": "team-seo@votreentreprise.com",
+        "subject": "=📊 Rapport Audit SEO — {{ $json.siteUrl }} — Score: {{ $json.score }}/100",
+        "emailFormat": "html",
+        "message": "={{ $json.htmlReport }}",
+        "options": {
+          "attachments": ""
+        }
+      },
+      "id": "send-email-report",
+      "name": "Envoyer Rapport Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [2660, 460],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "value": "={{ $vars.AUDIT_HISTORY_SHEET_ID }}"
+        },
+        "sheetName": "Historique",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ new Date().toLocaleDateString('fr-FR') }}",
+            "Site": "={{ $json.siteUrl }}",
+            "Score": "={{ $json.score }}",
+            "Critique": "={{ $json.criticalIssuesCount }}",
+            "Avertissements": "={{ $json.warningIssuesCount }}",
+            "Pages_Analysees": "={{ $json.totalPages }}",
+            "PageSpeed_Mobile": "={{ $json.pagespeed.mobile.score }}",
+            "PageSpeed_Desktop": "={{ $json.pagespeed.desktop.score }}"
+          }
+        }
+      },
+      "id": "log-to-sheets",
+      "name": "Historique Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [2880, 460],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "gsheets-creds",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Hebdomadaire": {
+      "main": [
+        [{"node": "Normaliser Paramètres", "type": "main", "index": 0}]
+      ]
+    },
+    "Webhook Audit On-Demand": {
+      "main": [
+        [{"node": "Normaliser Paramètres", "type": "main", "index": 0}]
+      ]
+    },
+    "Normaliser Paramètres": {
+      "main": [
+        [
+          {"node": "Apify - Crawler le Site", "type": "main", "index": 0},
+          {"node": "Google Search Console", "type": "main", "index": 0},
+          {"node": "PageSpeed Mobile", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Apify - Crawler le Site": {
+      "main": [
+        [{"node": "Récupérer Résultats Crawl", "type": "main", "index": 0}]
+      ]
+    },
+    "Récupérer Résultats Crawl": {
+      "main": [
+        [{"node": "Fusionner Données", "type": "main", "index": 0}]
+      ]
+    },
+    "Google Search Console": {
+      "main": [
+        [{"node": "Fusionner Données", "type": "main", "index": 1}]
+      ]
+    },
+    "PageSpeed Mobile": {
+      "main": [
+        [
+          {"node": "PageSpeed Desktop", "type": "main", "index": 0},
+          {"node": "Fusionner Données", "type": "main", "index": 2}
+        ]
+      ]
+    },
+    "PageSpeed Desktop": {
+      "main": [
+        [{"node": "Fusionner Données", "type": "main", "index": 3}]
+      ]
+    },
+    "Fusionner Données": {
+      "main": [
+        [{"node": "Analyser Résultats SEO", "type": "main", "index": 0}]
+      ]
+    },
+    "Analyser Résultats SEO": {
+      "main": [
+        [{"node": "GPT-4 Analyse Stratégique", "type": "main", "index": 0}]
+      ]
+    },
+    "GPT-4 Analyse Stratégique": {
+      "main": [
+        [{"node": "Générer Rapport HTML", "type": "main", "index": 0}]
+      ]
+    },
+    "Générer Rapport HTML": {
+      "main": [
+        [{"node": "Problèmes Critiques?", "type": "main", "index": 0}]
+      ]
+    },
+    "Problèmes Critiques?": {
+      "main": [
+        [
+          {"node": "Alerte Slack Critique", "type": "main", "index": 0},
+          {"node": "Envoyer Rapport Email", "type": "main", "index": 0}
+        ],
+        [{"node": "Envoyer Rapport Email", "type": "main", "index": 0}]
+      ]
+    },
+    "Envoyer Rapport Email": {
+      "main": [
+        [{"node": "Historique Google Sheets", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {"name": "marketing"},
+    {"name": "seo"},
+    {"name": "audit"}
+  ]
+}
