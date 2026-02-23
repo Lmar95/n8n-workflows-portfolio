@@ -1,0 +1,170 @@
+{
+  "name": "Flux Pré-Qualification Automatique Prospects",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🤖 Pré-Qualification Automatique\n\n**Objectif:** Qualifier automatiquement les prospects via une séquence de questions + IA, avant le premier contact commercial.\n\n**Déclencheur:** Formulaire web soumis ou webhook\n\n**Variables requises:**\n- OPENAI_API_KEY\n- HUBSPOT_API_KEY\n- SENDGRID_API_KEY\n- SLACK_WEBHOOK_URL_VENTE\n- CALENDLY_API_KEY",
+        "height": 240,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qualify-prospect",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Formulaire Contact",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "qualify-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es un consultant commercial expert. Analyse cette demande de contact et qualifie le prospect selon le framework BANT (Budget, Autorité, Besoin, Timeline).\"},{\"role\":\"user\",\"content\":\"Prospect: \" + ($json.prenom || '') + \" \" + ($json.nom || '') + \"\\nEntreprise: \" + ($json.entreprise || '') + \"\\nPoste: \" + ($json.poste || '') + \"\\nMessage: \" + ($json.message || '') + \"\\nBesoin: \" + ($json.besoin || '') + \"\\nBudget: \" + ($json.budget || 'Non spécifié') + \"\\nTimeline: \" + ($json.timeline || 'Non spécifié') + \"\\n\\nAnalyse et retourne JSON avec:\\n- qualification: 'hot' | 'warm' | 'cold' | 'disqualified'\\n- score_bant: 0-100\\n- budget_detecte: estimation budget\\n- decision_maker: true/false\\n- urgence: 'haute' | 'moyenne' | 'basse'\\n- besoins_detectes: array des besoins\\n- objections_potentielles: array\\n- prochaine_action: recommandation\\n- message_personnalise: email de réponse personnalisé (200 mots)\"}]"
+            },
+            { "name": "max_tokens", "value": "1000" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "qualify-with-ai",
+      "name": "IA Qualifie Prospect",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst formData = $node['Webhook Formulaire Contact'].first().json;\n\nlet qualification;\ntry {\n  qualification = JSON.parse(response.choices[0].message.content);\n} catch (e) {\n  qualification = { qualification: 'warm', score_bant: 50, message_personnalise: 'Merci pour votre message!' };\n}\n\nreturn [{\n  json: {\n    ...formData,\n    qualification: qualification.qualification,\n    scoreBant: qualification.score_bant,\n    budgetDetecte: qualification.budget_detecte,\n    decisionMaker: qualification.decision_maker,\n    urgence: qualification.urgence,\n    besoins: qualification.besoins_detectes?.join(', '),\n    objections: qualification.objections_potentielles?.join(', '),\n    prochaineAction: qualification.prochaine_action,\n    messagePersonnalise: qualification.message_personnalise,\n    dateContact: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-qualification",
+      "name": "Parser Qualification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.HUBSPOT_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"properties\": {\"email\": \"{{ $json.email }}\", \"firstname\": \"{{ $json.prenom }}\", \"lastname\": \"{{ $json.nom }}\", \"company\": \"{{ $json.entreprise }}\", \"jobtitle\": \"{{ $json.poste }}\", \"phone\": \"{{ $json.telephone }}\", \"lead_qualification\": \"{{ $json.qualification }}\", \"lead_score\": \"{{ $json.scoreBant }}\", \"hs_lead_status\": \"{{ $json.qualification === 'hot' ? 'IN_PROGRESS' : 'NEW' }}\"}}"
+      },
+      "id": "create-hubspot-contact",
+      "name": "Créer Contact HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $json.email }}\", \"name\": \"{{ $json.prenom }}\"}]}], \"from\": {\"email\": \"{{$vars.SALES_EMAIL}}\", \"name\": \"{{$vars.COMPANY_NAME}}\"}, \"subject\": \"Re: Votre demande de contact\", \"content\": [{\"type\": \"text/html\", \"value\": \"<p>{{ $json.messagePersonnalise }}</p>{{ $json.qualification === 'hot' ? '<p><a href=\\\"{{$vars.CALENDLY_URL}}\\\">Réserver un appel de 30 min →</a></p>' : '' }}\"}]}"
+      },
+      "id": "send-response",
+      "name": "Email Réponse Personnalisée",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.qualification }}",
+              "rightValue": "hot",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-hot",
+      "name": "Prospect HOT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL_VENTE}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🚀 *Prospect HOT qualifié!*\n\n*Contact:* {{ $json.prenom }} {{ $json.nom }}\n*Entreprise:* {{ $json.entreprise }}\n*Score BANT:* {{ $json.scoreBant }}/100\n*Urgence:* {{ $json.urgence }}\n*Besoins:* {{ $json.besoins }}\n\n*Action recommandée:* {{ $json.prochaineAction }}\n\n📞 Appeler dans les 2h!"
+            }
+          ]
+        }
+      },
+      "id": "slack-hot",
+      "name": "Alerte Vente HOT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"qualification\": \"{{ $json.qualification }}\", \"score\": {{ $json.scoreBant }}}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1640, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Formulaire Contact": { "main": [[{ "node": "IA Qualifie Prospect", "type": "main", "index": 0 }]] },
+    "IA Qualifie Prospect": { "main": [[{ "node": "Parser Qualification", "type": "main", "index": 0 }]] },
+    "Parser Qualification": {
+      "main": [[
+        { "node": "Créer Contact HubSpot", "type": "main", "index": 0 },
+        { "node": "Email Réponse Personnalisée", "type": "main", "index": 0 }
+      ]]
+    },
+    "Email Réponse Personnalisée": { "main": [[{ "node": "Prospect HOT?", "type": "main", "index": 0 }]] },
+    "Prospect HOT?": {
+      "main": [
+        [{ "node": "Alerte Vente HOT", "type": "main", "index": 0 }],
+        [{ "node": "Réponse Webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "Alerte Vente HOT": { "main": [[{ "node": "Réponse Webhook", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "vente" }, { "name": "qualification" }, { "name": "crm" }]
+}
