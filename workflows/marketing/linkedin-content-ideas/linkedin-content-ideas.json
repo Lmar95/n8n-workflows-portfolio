@@ -1,0 +1,141 @@
+{
+  "name": "Génération Idées Contenu LinkedIn et Calendrier Éditorial",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 💡 Génération Idées Contenu LinkedIn\n\n**Objectif:** Générer automatiquement 30 idées de posts LinkedIn par mois basées sur les tendances, l'actualité secteur et la veille concurrentielle.\n\n**Déclencheur:** 1er de chaque mois\n\n**Variables requises:**\n- OPENAI_API_KEY\n- NOTION_API_KEY\n- NEWSAPI_KEY\n- SLACK_WEBHOOK_URL",
+        "height": 220,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 1 * *" }] }
+      },
+      "id": "monthly-trigger",
+      "name": "1er du Mois",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://newsapi.org/v2/top-headlines",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "apiKey", "value": "={{$vars.NEWSAPI_KEY}}" },
+            { "name": "q", "value": "={{$vars.SECTEUR_KEYWORDS || 'startup technology innovation'}}" },
+            { "name": "language", "value": "fr" },
+            { "name": "pageSize", "value": "20" }
+          ]
+        }
+      },
+      "id": "fetch-news",
+      "name": "Actualités Secteur",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const newsData = $node['Actualités Secteur'].first().json;\nconst articles = newsData.articles || [];\n\nconst newsTitles = articles\n  .slice(0, 10)\n  .map(a => `- ${a.title}`)\n  .join('\\n');\n\nreturn [{ json: { newsTitles } }];"
+      },
+      "id": "process-news",
+      "name": "Préparer Contexte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es expert en personal branding et content marketing LinkedIn. Génère des idées de posts engageants qui créent de la valeur.\"},{\"role\":\"user\",\"content\":\"Génère 30 idées de posts LinkedIn pour le mois prochain pour une entreprise dans le secteur: \" + (process.env.SECTEUR || 'B2B SaaS') + \"\\n\\nActualités récentes du secteur:\\n\" + $json.newsTitles + \"\\n\\nPour chaque idée fournis:\\n- Titre accrocheur\\n- Format (carrousel, texte, vidéo, sondage, article)\\n- Hook d'ouverture (1 phrase)\\n- Semaine suggérée (1 à 4)\\n- Angle (expertise, témoignage, behind the scenes, opinion, éducatif)\\n\\nMixe les formats et angles. Retourne un JSON avec un array 'posts'.\"}]"
+            },
+            { "name": "max_tokens", "value": "3000" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "generate-ideas",
+      "name": "GPT-4 Génère 30 Idées",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nlet posts;\ntry {\n  const content = JSON.parse(response.choices[0].message.content);\n  posts = content.posts || [];\n} catch (e) {\n  posts = [];\n}\n\nconst month = new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });\n\n// Préparer pour Notion - un item par post\nreturn posts.map((post, i) => ({\n  json: {\n    titre: post.titre || `Idée #${i+1}`,\n    format: post.format || 'Texte',\n    hook: post.hook || '',\n    semaine: post.semaine || Math.ceil((i+1)/7.5),\n    angle: post.angle || 'Éducatif',\n    statut: 'Idée',\n    mois: month,\n    ordre: i + 1\n  }\n}));"
+      },
+      "id": "format-posts",
+      "name": "Formater Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.NOTION_API_KEY}}" },
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"parent\": {\"database_id\": \"{{$vars.NOTION_DB_CONTENT_ID}}\"}, \"properties\": {\"Titre\": {\"title\": [{\"text\": {\"content\": \"{{ $json.titre }}\"}}]}, \"Format\": {\"select\": {\"name\": \"{{ $json.format }}\"}}, \"Angle\": {\"select\": {\"name\": \"{{ $json.angle }}\"}}, \"Semaine\": {\"number\": {{ $json.semaine }}}, \"Statut\": {\"select\": {\"name\": \"Idée\"}}, \"Hook\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $json.hook }}\"}}]}, \"Mois\": {\"rich_text\": [{\"text\": {\"content\": \"{{ $json.mois }}\"}}]}}}"
+      },
+      "id": "save-to-notion",
+      "name": "Sauvegarder Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=📅 *Calendrier Éditorial LinkedIn généré!*\n\n30 idées de posts pour le mois prochain ont été créées et ajoutées à Notion.\n\nRendez-vous dans votre base Notion Contenu pour les consulter et les planifier!"
+            }
+          ]
+        }
+      },
+      "id": "slack-notify",
+      "name": "Notification Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1880, 300]
+    }
+  ],
+  "connections": {
+    "1er du Mois": { "main": [[{ "node": "Actualités Secteur", "type": "main", "index": 0 }]] },
+    "Actualités Secteur": { "main": [[{ "node": "Préparer Contexte", "type": "main", "index": 0 }]] },
+    "Préparer Contexte": { "main": [[{ "node": "GPT-4 Génère 30 Idées", "type": "main", "index": 0 }]] },
+    "GPT-4 Génère 30 Idées": { "main": [[{ "node": "Formater Posts", "type": "main", "index": 0 }]] },
+    "Formater Posts": { "main": [[{ "node": "Sauvegarder Notion", "type": "main", "index": 0 }]] },
+    "Sauvegarder Notion": { "main": [[{ "node": "Notification Slack", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "linkedin" }, { "name": "content" }]
+}
