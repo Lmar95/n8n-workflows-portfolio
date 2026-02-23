@@ -1,13 +1,145 @@
 {
-  "name": "Performance Review Prep",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["hr","performance","reviews","automation"],
-  "meta": {
-    "description": "For each upcoming annual review, automatically compile all relevant data: annual objectives and achievement rate, KPIs reached, 360° feedback received, completed projects, training followed, notable incidents and successes. Pre-fill manager dossier with suggested discussion points + employee self-assessment form.",
-    "difficulty": "⭐⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Préparation Automatique Entretiens de Recrutement",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🎤 Préparation Automatique Entretiens\n\n**Objectif:** Préparer automatiquement les entretiens: générer questions personnalisées, brief pour le recruteur, email de confirmation candidat.\n\n**Déclencheur:** Calendrier Google - Événement avec tag [ENTRETIEN]\n\n**Variables requises:**\n- OPENAI_API_KEY\n- GOOGLE_CALENDAR_ID\n- SENDGRID_API_KEY\n- GOOGLE_SHEETS_ID_CANDIDATS",
+        "height": 240,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 4 }] }
+      },
+      "id": "schedule-trigger",
+      "name": "Vérif Entretiens Toutes 4h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "calendar": { "value": "={{$vars.GOOGLE_CALENDAR_ID}}", "__rl": true, "mode": "id" },
+        "timeMin": "={{ new Date().toISOString() }}",
+        "timeMax": "={{ new Date(Date.now() + 24*60*60*1000).toISOString() }}",
+        "options": { "query": "ENTRETIEN" }
+      },
+      "id": "get-interviews",
+      "name": "Entretiens Prochaines 24h",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [680, 300],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "gcal-cred", "name": "Google Calendar OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = $input.all();\nconst interviewsToPrep = [];\n\nfor (const event of events) {\n  const e = event.json;\n  // Vérifier si la préparation n'a pas encore été faite (pas de description longue)\n  if (e.summary?.includes('ENTRETIEN') && (!e.description || e.description.length < 200)) {\n    const candidatEmail = e.attendees?.find(a => !a.organizer)?.email || '';\n    const heureEntretien = new Date(e.start?.dateTime || e.start?.date);\n    \n    interviewsToPrep.push({\n      eventId: e.id,\n      summary: e.summary,\n      candidatEmail,\n      heureEntretien: heureEntretien.toLocaleString('fr-FR'),\n      poste: e.summary.replace('[ENTRETIEN]', '').replace(/\\s+/g, ' ').trim(),\n      organisateur: e.organizer?.email || ''\n    });\n  }\n}\n\nif (interviewsToPrep.length === 0) {\n  return [{ json: { skip: true, message: 'Aucun entretien à préparer' } }];\n}\n\nreturn interviewsToPrep.map(i => ({ json: i }));"
+      },
+      "id": "filter-interviews",
+      "name": "Filtrer Entretiens à Préparer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "notTrue" }
+            }
+          ]
+        }
+      },
+      "id": "check-skip",
+      "name": "Entretiens Trouvés?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es expert en recrutement. Prépare des entretiens structurés et efficaces.\"},{\"role\":\"user\",\"content\":\"Prépare l'entretien pour le poste: \" + $json.poste + \"\\n\\nGénère:\\n1. 5 questions techniques spécifiques au poste\\n2. 3 questions comportementales (méthode STAR)\\n3. 3 questions de motivation et culture d'entreprise\\n4. 2 mises en situation pratiques\\n5. Points de vigilance à vérifier\\n6. Grille d'évaluation rapide (5 critères notés /5)\\n\\nFormat structuré, clair, utilisable directement en entretien.\"}]"
+            },
+            { "name": "max_tokens", "value": "1200" }
+          ]
+        }
+      },
+      "id": "generate-questions",
+      "name": "GPT-4 Génère Questions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $('Filtrer Entretiens à Préparer').first().json.candidatEmail }}\"}]}], \"from\": {\"email\": \"{{$vars.RH_EMAIL}}\", \"name\": \"Équipe RH\"}, \"subject\": \"Confirmation de votre entretien\", \"content\": [{\"type\": \"text/html\", \"value\": \"<h2>Confirmation d'entretien</h2><p>Nous confirmons votre entretien pour le poste de <strong>{{ $('Filtrer Entretiens à Préparer').first().json.poste }}</strong>.</p><p><strong>Date et heure:</strong> {{ $('Filtrer Entretiens à Préparer').first().json.heureEntretien }}</p><p>Pour préparer au mieux notre échange, nous vous recommandons de:</p><ul><li>Relire la description du poste</li><li>Préparer des exemples concrets de vos réalisations</li><li>Préparer vos questions sur le poste et l'entreprise</li></ul><p>À très bientôt !<br>L'équipe RH</p>\"}]}"
+      },
+      "id": "confirm-candidate",
+      "name": "Email Confirmation Candidat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.SENDGRID_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"personalizations\": [{\"to\": [{\"email\": \"{{ $('Filtrer Entretiens à Préparer').first().json.organisateur }}\"}]}], \"from\": {\"email\": \"{{$vars.RH_EMAIL}}\", \"name\": \"Système RH\"}, \"subject\": \"Brief entretien: {{ $('Filtrer Entretiens à Préparer').first().json.poste }}\", \"content\": [{\"type\": \"text/html\", \"value\": \"<h2>Brief Entretien - {{ $('Filtrer Entretiens à Préparer').first().json.poste }}</h2><p>Date: {{ $('Filtrer Entretiens à Préparer').first().json.heureEntretien }}</p><pre style='background:#f5f5f5;padding:16px;border-radius:4px;'>{{ $json.choices[0].message.content }}</pre>\"}]}"
+      },
+      "id": "brief-recruiter",
+      "name": "Brief Recruteur",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 200]
+    }
+  ],
+  "connections": {
+    "Vérif Entretiens Toutes 4h": { "main": [[{ "node": "Entretiens Prochaines 24h", "type": "main", "index": 0 }]] },
+    "Entretiens Prochaines 24h": { "main": [[{ "node": "Filtrer Entretiens à Préparer", "type": "main", "index": 0 }]] },
+    "Filtrer Entretiens à Préparer": { "main": [[{ "node": "Entretiens Trouvés?", "type": "main", "index": 0 }]] },
+    "Entretiens Trouvés?": {
+      "main": [
+        [
+          { "node": "GPT-4 Génère Questions", "type": "main", "index": 0 },
+          { "node": "Email Confirmation Candidat", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "GPT-4 Génère Questions": { "main": [[{ "node": "Brief Recruteur", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "recrutement" }, { "name": "entretiens" }]
 }
