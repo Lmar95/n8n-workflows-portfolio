@@ -1,0 +1,168 @@
+{
+  "name": "Reporting Automatisé Multi-Sources et Tableaux de Bord",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Reporting Automatisé\n\n**Objectif:** Compiler automatiquement les données de toutes vos sources (CRM, Analytics, Finance) et générer des rapports hebdomadaires/mensuels.\n\n**Déclencheur:** Lundi 8h (hebdo) + 1er du mois (mensuel)\n\n**Variables requises:**\n- HUBSPOT_API_KEY\n- GOOGLE_ANALYTICS_KEY\n- OPENAI_API_KEY\n- SENDGRID_API_KEY\n- SLACK_WEBHOOK_URL\n- GOOGLE_SHEETS_ID_REPORTING",
+        "height": 260,
+        "width": 380
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1" }] }
+      },
+      "id": "weekly-trigger",
+      "name": "Lundi 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 1 * *" }] }
+      },
+      "id": "monthly-trigger",
+      "name": "1er du Mois 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Déterminer type de rapport et période\nconst trigger = $input.context?.node?.name || 'Lundi 8h';\nconst isMonthly = trigger === '1er du Mois 8h';\n\nconst today = new Date();\nconst periodStart = isMonthly \n  ? new Date(today.getFullYear(), today.getMonth() - 1, 1)\n  : new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);\n\nreturn [{\n  json: {\n    reportType: isMonthly ? 'Mensuel' : 'Hebdomadaire',\n    periodStart: periodStart.toISOString(),\n    periodEnd: today.toISOString(),\n    periodLabel: isMonthly \n      ? periodStart.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })\n      : `Semaine du ${periodStart.toLocaleDateString('fr-FR')} au ${today.toLocaleDateString('fr-FR')}`\n  }\n}];"
+      },
+      "id": "set-period",
+      "name": "Définir Période",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 280]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.HUBSPOT_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"filterGroups\": [{\"filters\": [{\"propertyName\": \"closedate\", \"operator\": \"GTE\", \"value\": \"{{ new Date($json.periodStart).getTime() }}\"}]}], \"properties\": [\"dealname\", \"amount\", \"dealstage\", \"closedate\"], \"limit\": 100}"
+      },
+      "id": "get-deals",
+      "name": "Deals HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 160]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.HUBSPOT_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"filterGroups\": [{\"filters\": [{\"propertyName\": \"createdate\", \"operator\": \"GTE\", \"value\": \"{{ new Date($node['Définir Période'].first().json.periodStart).getTime() }}\"}]}], \"limit\": 1, \"properties\": [\"createdate\"]}"
+      },
+      "id": "get-new-leads",
+      "name": "Nouveaux Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 320]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_REPORTING}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Métriques", "__rl": true, "mode": "name" }
+      },
+      "id": "get-custom-metrics",
+      "name": "Métriques Personnalisées",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [920, 480],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const periodData = $node['Définir Période'].first().json;\nconst dealsData = $node['Deals HubSpot'].first().json;\nconst leadsData = $node['Nouveaux Leads'].first().json;\nconst metricsData = $node['Métriques Personnalisées'].all();\n\nconst deals = dealsData.results || [];\nconst closedWon = deals.filter(d => d.properties?.dealstage === 'closedwon');\nconst pipeline = deals.filter(d => d.properties?.dealstage !== 'closedwon');\n\nconst revenuePeriode = closedWon.reduce((s, d) => s + parseFloat(d.properties?.amount || 0), 0);\nconst pipelineValue = pipeline.reduce((s, d) => s + parseFloat(d.properties?.amount || 0), 0);\nconst newLeads = leadsData.total || 0;\n\n// Métriques custom depuis Sheets\nconst customMetrics = {};\nfor (const m of metricsData) {\n  customMetrics[m.json['Métrique']] = m.json['Valeur Période'];\n}\n\nconst summary = {\n  ...periodData,\n  // Vente\n  revenuePeriode: Math.round(revenuePeriode),\n  nbDealsGagnes: closedWon.length,\n  pipelineValue: Math.round(pipelineValue),\n  newLeads,\n  // Custom\n  ...customMetrics\n};\n\nreturn [{ json: summary }];"
+      },
+      "id": "compile-metrics",
+      "name": "Compiler Métriques",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 320]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es analyste business. Génère des commentaires de management concis et actionnables basés sur les métriques.\"},{\"role\":\"user\",\"content\":\"Rapport \" + $json.reportType + \" - \" + $json.periodLabel + \"\\n\\nMétriques:\\n\" + JSON.stringify($json, null, 2) + \"\\n\\nGénère:\\n1. Résumé exécutif (3 phrases)\\n2. Points positifs (2-3)\\n3. Points d'attention (2-3)\\n4. Recommandations pour la semaine/mois suivant (3)\\n\\nTon: direct, orienté action, sans jargon.\"}]"
+            },
+            { "name": "max_tokens", "value": "600" }
+          ]
+        }
+      },
+      "id": "generate-insights",
+      "name": "IA Génère Insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 320]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=📊 *Rapport {{ $('Compiler Métriques').first().json.reportType }} - {{ $('Compiler Métriques').first().json.periodLabel }}*\n\n💰 *Revenus:* {{ $('Compiler Métriques').first().json.revenuePeriode.toLocaleString() }} €\n🎯 *Deals gagnés:* {{ $('Compiler Métriques').first().json.nbDealsGagnes }}\n📈 *Pipeline:* {{ $('Compiler Métriques').first().json.pipelineValue.toLocaleString() }} €\n👥 *Nouveaux leads:* {{ $('Compiler Métriques').first().json.newLeads }}\n\n*Analyse IA:*\n{{ $json.choices[0].message.content }}"
+            }
+          ]
+        }
+      },
+      "id": "slack-report",
+      "name": "Rapport Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 320]
+    }
+  ],
+  "connections": {
+    "Lundi 8h": { "main": [[{ "node": "Définir Période", "type": "main", "index": 0 }]] },
+    "1er du Mois 8h": { "main": [[{ "node": "Définir Période", "type": "main", "index": 0 }]] },
+    "Définir Période": {
+      "main": [[
+        { "node": "Deals HubSpot", "type": "main", "index": 0 },
+        { "node": "Nouveaux Leads", "type": "main", "index": 0 },
+        { "node": "Métriques Personnalisées", "type": "main", "index": 0 }
+      ]]
+    },
+    "Deals HubSpot": { "main": [[{ "node": "Compiler Métriques", "type": "main", "index": 0 }]] },
+    "Nouveaux Leads": { "main": [[{ "node": "Compiler Métriques", "type": "main", "index": 0 }]] },
+    "Métriques Personnalisées": { "main": [[{ "node": "Compiler Métriques", "type": "main", "index": 0 }]] },
+    "Compiler Métriques": { "main": [[{ "node": "IA Génère Insights", "type": "main", "index": 0 }]] },
+    "IA Génère Insights": { "main": [[{ "node": "Rapport Slack", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operationnel" }, { "name": "reporting" }, { "name": "analytics" }]
+}
