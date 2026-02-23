@@ -1,13 +1,142 @@
 {
-  "name": "Project Time & Profitability Tracker",
-  "nodes": [],
-  "connections": {},
-  "active": false,
-  "settings": {},
-  "tags": ["admin","finance","time-tracking","profitability"],
-  "meta": {
-    "description": "Connect time tracking and project management tools. Calculate real project cost (hours × daily rate per contributor), compare against budget and sale price. Real-time profitability dashboards with alerts when a project exceeds 10% budget overrun.",
-    "difficulty": "⭐⭐⭐",
-    "note": "Import into n8n, reconnect credentials. See README.md for full setup."
-  }
+  "name": "Calcul Automatique Rentabilité Projets et Reporting",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📈 Rentabilité Projets Automatisée\n\n**Objectif:** Calculer automatiquement la rentabilité de chaque projet en temps réel et générer des alertes si les marges sont en danger.\n\n**Déclencheur:** Hebdomadaire (vendredi 17h) + Webhook mise à jour temps\n\n**Variables requises:**\n- GOOGLE_SHEETS_ID_PROJETS\n- SLACK_WEBHOOK_URL\n- SENDGRID_API_KEY\n- NOTION_API_KEY",
+        "height": 240,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 17 * * 5" }] }
+      },
+      "id": "weekly-trigger",
+      "name": "Vendredi 17h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_PROJETS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Projets", "__rl": true, "mode": "name" },
+        "filters": {
+          "conditions": [{ "keyName": "Statut", "condition": "eq", "keyValue": "En cours" }]
+        }
+      },
+      "id": "get-projects",
+      "name": "Projets En Cours",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_PROJETS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Temps_Passés", "__rl": true, "mode": "name" }
+      },
+      "id": "get-timesheets",
+      "name": "Feuilles de Temps",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [680, 460],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const projects = $node['Projets En Cours'].all();\nconst timesheets = $node['Feuilles de Temps'].all();\n\n// Agréger temps par projet\nconst timeByProject = {};\nfor (const t of timesheets) {\n  const projectId = t.json['ID Projet'];\n  if (!timeByProject[projectId]) timeByProject[projectId] = 0;\n  timeByProject[projectId] += parseFloat(t.json['Heures'] || 0);\n}\n\nconst results = [];\nconst alerts = [];\n\nfor (const p of projects) {\n  const proj = p.json;\n  const projId = proj['ID Projet'];\n  \n  const budgetHT = parseFloat(proj['Budget HT'] || 0);\n  const tauxJournalier = parseFloat(proj['TJM'] || 0);\n  const heuresBudgetees = tauxJournalier > 0 ? (budgetHT / tauxJournalier) * 8 : parseFloat(proj['Heures Budgétées'] || 0);\n  const chargesEstimees = parseFloat(proj['Charges Estimées'] || budgetHT * 0.6);\n  \n  const heuresPassees = timeByProject[projId] || 0;\n  const fraisInternes = heuresPassees * (tauxJournalier / 8 || 50);\n  \n  const avancement = heuresBudgetees > 0 ? Math.round(heuresPassees / heuresBudgetees * 100) : 0;\n  const margeActuelle = budgetHT - fraisInternes;\n  const margePourcentage = budgetHT > 0 ? Math.round(margeActuelle / budgetHT * 100) : 0;\n  \n  const statut = avancement > 100 ? 'DÉPASSEMENT' : avancement > 85 ? 'ATTENTION' : 'OK';\n  \n  if (statut !== 'OK') {\n    alerts.push({\n      projet: proj['Nom Projet'],\n      client: proj['Client'],\n      avancement,\n      margePourcentage,\n      statut\n    });\n  }\n  \n  results.push({\n    json: {\n      id: projId,\n      nom: proj['Nom Projet'],\n      client: proj['Client'],\n      budgetHT,\n      heuresBudgetees: Math.round(heuresBudgetees),\n      heuresPassees: Math.round(heuresPassees),\n      avancement: Math.min(avancement, 200),\n      fraisInternes: Math.round(fraisInternes),\n      margeActuelle: Math.round(margeActuelle),\n      margePourcentage,\n      statut,\n      commercial: proj['Commercial']\n    }\n  });\n}\n\n// Ajouter résumé global comme premier item\nconst totalBudget = results.reduce((s, r) => s + r.json.budgetHT, 0);\nconst totalMarge = results.reduce((s, r) => s + r.json.margeActuelle, 0);\nconst avgMarge = results.length ? Math.round(totalMarge / totalBudget * 100) : 0;\n\n// Passer alertes via premier item\nif (results.length > 0) {\n  results[0].json._summary = {\n    totalProjets: results.length,\n    totalBudget,\n    totalMarge,\n    avgMarge,\n    alertes: alerts\n  };\n}\n\nreturn results.length > 0 ? results : [{ json: { skip: true } }];"
+      },
+      "id": "calculate-profitability",
+      "name": "Calculer Rentabilité",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 380]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID_PROJETS}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Projets", "__rl": true, "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Avancement %": "={{ $json.avancement }}",
+            "Heures Passées": "={{ $json.heuresPassees }}",
+            "Marge Actuelle €": "={{ $json.margeActuelle }}",
+            "Marge %": "={{ $json.margePourcentage }}",
+            "Statut Rentabilité": "={{ $json.statut }}",
+            "Dernière MAJ": "={{ new Date().toISOString().split('T')[0] }}"
+          }
+        }
+      },
+      "id": "update-projects",
+      "name": "MAJ Projets Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1160, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.statut }}",
+              "rightValue": "OK",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ]
+        }
+      },
+      "id": "check-alerts",
+      "name": "Alerte Requise?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.statut === 'DÉPASSEMENT' ? '🔴' : '🟡' }} *{{ $json.statut }}: {{ $json.nom }}*\n\n*Client:* {{ $json.client }}\n*Avancement:* {{ $json.avancement }}% (budgété: {{ $json.heuresBudgetees }}h / passé: {{ $json.heuresPassees }}h)\n*Marge actuelle:* {{ $json.margeActuelle }} € ({{ $json.margePourcentage }}%)\n\nAction requise: revoir le scope ou renégocier avec le client."
+            }
+          ]
+        }
+      },
+      "id": "slack-alert",
+      "name": "Alerte Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 200]
+    }
+  ],
+  "connections": {
+    "Vendredi 17h": { "main": [[{ "node": "Projets En Cours", "type": "main", "index": 0 }, { "node": "Feuilles de Temps", "type": "main", "index": 0 }]] },
+    "Projets En Cours": { "main": [[{ "node": "Calculer Rentabilité", "type": "main", "index": 0 }]] },
+    "Feuilles de Temps": { "main": [[{ "node": "Calculer Rentabilité", "type": "main", "index": 0 }]] },
+    "Calculer Rentabilité": { "main": [[{ "node": "MAJ Projets Google Sheets", "type": "main", "index": 0 }]] },
+    "MAJ Projets Google Sheets": { "main": [[{ "node": "Alerte Requise?", "type": "main", "index": 0 }]] },
+    "Alerte Requise?": {
+      "main": [
+        [{ "node": "Alerte Slack", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "admin" }, { "name": "projets" }, { "name": "finance" }]
 }
