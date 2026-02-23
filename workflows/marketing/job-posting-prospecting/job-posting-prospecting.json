@@ -1,0 +1,141 @@
+{
+  "name": "Prospection Automatisée via Offres d'Emploi Concurrents",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🕵️ Prospection via Offres d'Emploi\n\n**Objectif:** Monitorer les offres d'emploi des prospects pour détecter les signaux d'achat (recrutements dans votre domaine = signal fort).\n\n**Déclencheur:** Quotidien à 7h\n\n**Variables requises:**\n- OPENAI_API_KEY\n- HUBSPOT_API_KEY\n- SLACK_WEBHOOK_URL\n- GOOGLE_SHEETS_ID",
+        "height": 220,
+        "width": 360
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 7 * * 1-5" }] }
+      },
+      "id": "daily-trigger",
+      "name": "Lundi-Vendredi 7h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://jsearch.p.rapidapi.com/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-RapidAPI-Key", "value": "={{$vars.RAPIDAPI_KEY}}" },
+            { "name": "X-RapidAPI-Host", "value": "jsearch.p.rapidapi.com" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "={{$vars.JOB_SEARCH_KEYWORDS || 'marketing digital responsable'}}" },
+            { "name": "page", "value": "1" },
+            { "name": "num_pages", "value": "3" },
+            { "name": "date_posted", "value": "today" },
+            { "name": "country", "value": "FR" }
+          ]
+        }
+      },
+      "id": "search-jobs",
+      "name": "Rechercher Offres Emploi",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst jobs = data.data || [];\n\n// Filtrer les jobs pertinents (signal d'achat)\nconst relevantJobs = jobs.filter(job => {\n  const title = job.job_title?.toLowerCase() || '';\n  const desc = job.job_description?.toLowerCase() || '';\n  \n  // Chercher les mots-clés indiquant un besoin en votre service\n  const keywords = (process.env.BUY_SIGNAL_KEYWORDS || 'marketing digital,growth,acquisition,seo,ads,automation').split(',');\n  return keywords.some(kw => title.includes(kw.trim()) || desc.includes(kw.trim()));\n});\n\nreturn relevantJobs.slice(0, 20).map(job => ({\n  json: {\n    entreprise: job.employer_name,\n    poste: job.job_title,\n    lieu: job.job_city || job.job_country,\n    description: job.job_description?.slice(0, 500),\n    url: job.job_apply_link,\n    datePublication: job.job_posted_at_datetime_utc,\n    salaire: job.job_min_salary ? `${job.job_min_salary}-${job.job_max_salary} ${job.job_salary_currency}` : 'Non spécifié'\n  }\n}));"
+      },
+      "id": "filter-signals",
+      "name": "Filtrer Signaux Achat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es expert en prospection B2B. Analyse cette offre d'emploi et génère un message de prospection personnalisé.\"},{\"role\":\"user\",\"content\":\"Entreprise: \" + $json.entreprise + \"\\nPoste recruté: \" + $json.poste + \"\\nDescription: \" + $json.description + \"\\n\\nGénère:\\n1. Analyse du signal (pourquoi c'est un prospect intéressant)\\n2. Message LinkedIn de prospection personnalisé (max 300 chars)\\n3. Email cold outreach personnalisé (objet + corps 150 mots)\\n4. Score de priorité 1-10\"}]"
+            },
+            { "name": "max_tokens", "value": "600" }
+          ]
+        }
+      },
+      "id": "generate-outreach",
+      "name": "GPT-4 Message Prospection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "value": "={{$vars.GOOGLE_SHEETS_ID}}", "__rl": true, "mode": "id" },
+        "sheetName": { "value": "Signaux Emploi", "__rl": true, "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Entreprise": "={{ $('Filtrer Signaux Achat').first().json.entreprise }}",
+            "Poste Recruté": "={{ $('Filtrer Signaux Achat').first().json.poste }}",
+            "Message Prospection": "={{ $json.choices[0].message.content.slice(0, 200) }}",
+            "URL Offre": "={{ $('Filtrer Signaux Achat').first().json.url }}",
+            "Date Détection": "={{ new Date().toISOString().split('T')[0] }}",
+            "Statut": "=À contacter"
+          }
+        }
+      },
+      "id": "log-prospects",
+      "name": "Logger Prospects",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1400, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "gsheets-cred", "name": "Google Sheets OAuth2" } }
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=🎯 *Signal d'achat détecté!*\n\n*Entreprise:* {{ $('Filtrer Signaux Achat').first().json.entreprise }}\n*Recrutent:* {{ $('Filtrer Signaux Achat').first().json.poste }}\n\n*Message suggéré:* {{ $json.choices[0].message.content.slice(0, 300) }}"
+            }
+          ]
+        }
+      },
+      "id": "slack-alert",
+      "name": "Alerte Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 300]
+    }
+  ],
+  "connections": {
+    "Lundi-Vendredi 7h": { "main": [[{ "node": "Rechercher Offres Emploi", "type": "main", "index": 0 }]] },
+    "Rechercher Offres Emploi": { "main": [[{ "node": "Filtrer Signaux Achat", "type": "main", "index": 0 }]] },
+    "Filtrer Signaux Achat": { "main": [[{ "node": "GPT-4 Message Prospection", "type": "main", "index": 0 }]] },
+    "GPT-4 Message Prospection": { "main": [[{ "node": "Logger Prospects", "type": "main", "index": 0 }]] },
+    "Logger Prospects": { "main": [[{ "node": "Alerte Slack", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "prospection" }, { "name": "sales-intelligence" }]
+}
