@@ -1,0 +1,166 @@
+{
+  "name": "Création de contenu automatisée - YouTube, LinkedIn, Twitter",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "creation-contenu",
+        "options": {}
+      },
+      "id": "b1c2d3e4-0001",
+      "name": "Webhook - Demande de contenu",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst topic = body.topic || body.sujet;\nconst platforms = body.platforms || ['linkedin', 'twitter', 'youtube'];\nconst tone = body.tone || 'professionnel';\nconst targetAudience = body.target_audience || body.audience_cible || 'professionnels B2B';\nconst cta = body.cta || 'Dites-moi en commentaire';\n\nreturn [{\n  json: {\n    topic,\n    platforms,\n    tone,\n    targetAudience,\n    cta,\n    request_id: `CONT-${Date.now()}`,\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "b1c2d3e4-0002",
+      "name": "Normalisation de la demande",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en création de contenu digital pour les professionnels B2B. Tu crées du contenu viral, engageant et éducatif adapté à chaque plateforme."
+            },
+            {
+              "role": "user",
+              "content": "=Crée du contenu complet sur le sujet : {{ $json.topic }}\n\nAudience : {{ $json.targetAudience }}\nTon : {{ $json.tone }}\nCTA souhaité : {{ $json.cta }}\n\nGénère le tout en JSON strict avec ces clés :\n{\n  \"linkedin_post\": {\n    \"hook\": \"Accroche irrésistible (1 ligne)\",\n    \"body\": \"Corps du post LinkedIn (300-500 mots, avec sauts de ligne, emojis stratégiques)\",\n    \"hashtags\": [\"hashtag1\", \"hashtag2\", \"hashtag3\"],\n    \"full_post\": \"Post complet prêt à publier\"\n  },\n  \"linkedin_carousel\": {\n    \"title\": \"Titre du carrousel\",\n    \"slides\": [\n      {\"number\": 1, \"title\": \"...\", \"content\": \"...\"},\n      {\"number\": 2, \"title\": \"...\", \"content\": \"...\"}\n    ],\n    \"num_slides\": 7\n  },\n  \"twitter_thread\": {\n    \"tweets\": [\n      {\"number\": 1, \"content\": \"Tweet d'accroche (max 280 car)\"},\n      {\"number\": 2, \"content\": \"...\"}\n    ],\n    \"num_tweets\": 8\n  },\n  \"youtube_script\": {\n    \"title\": \"Titre YouTube SEO-optimisé\",\n    \"description\": \"Description YouTube (300 mots, avec timestamps et mots-clés)\",\n    \"script\": \"Script complet avec intro, développement, conclusion et CTA\",\n    \"chapters\": [{\"time\": \"00:00\", \"title\": \"...\"}, {\"time\": \"02:30\", \"title\": \"...\"}],\n    \"tags\": [\"tag1\", \"tag2\"]\n  },\n  \"content_calendar_suggestion\": \"Suggestion de planning de publication (jours/heures optimaux)\"\n}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.75, "maxTokens": 4000 }
+      },
+      "id": "b1c2d3e4-0003",
+      "name": "GPT-4 - Génération contenu multi-plateforme",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalisation de la demande').first().json;\nlet content;\ntry {\n  const raw = $input.first().json.message.content;\n  content = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  throw new Error('Erreur parsing GPT-4: ' + e.message);\n}\n\nreturn [{\n  json: {\n    request_id: request.request_id,\n    topic: request.topic,\n    generated_at: new Date().toISOString(),\n    linkedin_post: content.linkedin_post,\n    linkedin_carousel: content.linkedin_carousel,\n    twitter_thread: content.twitter_thread,\n    youtube_script: content.youtube_script,\n    calendar_suggestion: content.content_calendar_suggestion,\n    // Extracts pour Google Sheets\n    linkedin_full_post: content.linkedin_post?.full_post,\n    linkedin_hashtags: content.linkedin_post?.hashtags?.join(' '),\n    twitter_first_tweet: content.twitter_thread?.tweets?.[0]?.content,\n    youtube_title: content.youtube_script?.title,\n    youtube_description: content.youtube_script?.description\n  }\n}];"
+      },
+      "id": "b1c2d3e4-0004",
+      "name": "Parsing et structuration du contenu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "resource": "page",
+        "operation": "create",
+        "databaseId": "={{ $vars.NOTION_CONTENT_DB_ID }}",
+        "title": "=Contenu - {{ $json.topic }} - {{ $now.format('dd/MM/yyyy') }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Sujet", "type": "title", "titleValue": "={{ $json.topic }}" },
+            { "key": "Statut", "type": "select", "selectValue": "Prêt à publier" },
+            { "key": "Date création", "type": "date", "dateValue": "={{ $json.generated_at }}" },
+            { "key": "Request ID", "type": "rich_text", "textContent": "={{ $json.request_id }}" }
+          ]
+        },
+        "blockUi": {
+          "blockValues": [
+            {
+              "type": "heading_1",
+              "textContent": "=📝 Contenu - {{ $json.topic }}"
+            },
+            {
+              "type": "heading_2",
+              "textContent": "LinkedIn - Post texte"
+            },
+            {
+              "type": "paragraph",
+              "textContent": "={{ $json.linkedin_full_post }}"
+            },
+            {
+              "type": "heading_2",
+              "textContent": "Twitter/X - Thread"
+            },
+            {
+              "type": "paragraph",
+              "textContent": "={{ $json.twitter_thread?.tweets?.map(t => t.number + '. ' + t.content).join('\\n\\n') }}"
+            },
+            {
+              "type": "heading_2",
+              "textContent": "YouTube - Script"
+            },
+            {
+              "type": "paragraph",
+              "textContent": "={{ $json.youtube_script?.script }}"
+            }
+          ]
+        }
+      },
+      "id": "b1c2d3e4-0005",
+      "name": "Notion - Sauvegarde dans bibliothèque de contenu",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1040, 200],
+      "credentials": { "notionApi": { "id": "1", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=✅ *Nouveau contenu généré !*\n\n*Sujet :* {{ $json.topic }}\n*ID :* {{ $json.request_id }}\n\n*LinkedIn Post :*\n{{ $json.linkedin_full_post?.substring(0, 300) }}...\n\n*YouTube Titre :* {{ $json.youtube_title }}\n\n*Planning suggéré :* {{ $json.calendar_suggestion }}\n\n📋 Voir dans Notion pour le contenu complet"
+            }
+          ]
+        }
+      },
+      "id": "b1c2d3e4-0006",
+      "name": "Slack - Notification contenu prêt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1040, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, request_id: $json.request_id, topic: $json.topic, platforms_generated: ['linkedin', 'twitter', 'youtube'], notion_saved: true, message: 'Contenu généré et sauvegardé avec succès' }) }}"
+      },
+      "id": "b1c2d3e4-0007",
+      "name": "Réponse webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "content": "## 🎬 Création de Contenu Multi-Plateforme\n\n**Objectif :** À partir d'un sujet, génère automatiquement du contenu optimisé pour YouTube, LinkedIn (post + carrousel) et Twitter (thread).\n\n**Déclencheur :** POST /webhook/creation-contenu\n\n**Payload :**\n```json\n{\n  \"topic\": \"Les 5 erreurs à éviter en prospection B2B\",\n  \"tone\": \"professionnel\",\n  \"target_audience\": \"Directeurs commerciaux\",\n  \"cta\": \"Téléchargez notre guide gratuit\"\n}\n```\n\n**Sorties :**\n- LinkedIn : post texte + structure carrousel\n- Twitter : thread complet\n- YouTube : script + titre SEO + description + chapitres\n- Sauvegarde Notion\n- Notification Slack\n\n**Variables requises :**\n- OPENAI_API_KEY\n- NOTION_CONTENT_DB_ID\n- SLACK_WEBHOOK_URL",
+        "height": 380,
+        "width": 420
+      },
+      "id": "b1c2d3e4-0000",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    }
+  ],
+  "connections": {
+    "Webhook - Demande de contenu": { "main": [[{ "node": "Normalisation de la demande", "type": "main", "index": 0 }]] },
+    "Normalisation de la demande": { "main": [[{ "node": "GPT-4 - Génération contenu multi-plateforme", "type": "main", "index": 0 }]] },
+    "GPT-4 - Génération contenu multi-plateforme": { "main": [[{ "node": "Parsing et structuration du contenu", "type": "main", "index": 0 }]] },
+    "Parsing et structuration du contenu": { "main": [[{ "node": "Notion - Sauvegarde dans bibliothèque de contenu", "type": "main", "index": 0 }, { "node": "Slack - Notification contenu prêt", "type": "main", "index": 0 }, { "node": "Réponse webhook", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "contenu" }, { "name": "linkedin" }, { "name": "youtube" }]
+}
