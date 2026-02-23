@@ -1,0 +1,106 @@
+{
+  "name": "Copywriting Automatisé Landing Pages et Emails Marketing",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ✍️ Copywriting Automatisé\n\n**Objectif:** Générer des textes de landing pages et emails marketing optimisés pour la conversion avec les meilleures pratiques copywriting.\n\n**Déclencheur:** Webhook POST avec brief produit/offre\n\n**Variables requises:**\n- OPENAI_API_KEY\n- NOTION_API_KEY",
+        "height": 200,
+        "width": 340
+      },
+      "id": "sticky-1",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "copywriting",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Brief Copywriting",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "webhookId": "copywriting-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{$vars.OPENAI_API_KEY}}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4-turbo-preview" },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Tu es copywriter expert avec 15 ans d'expérience. Tu maîtrises les frameworks AIDA, PAS, StoryBrand. Tu rédiges des textes qui convertissent.\"},{\"role\":\"user\",\"content\":\"Rédige le copywriting complet pour:\\n\\nProduit/Service: \" + $json.produit + \"\\nCible: \" + $json.cible + \"\\nProblème résolu: \" + $json.probleme + \"\\nBénéfice principal: \" + $json.benefice + \"\\nOffre spécifique: \" + ($json.offre || '') + \"\\nPrix: \" + ($json.prix || 'À définir') + \"\\nType: \" + ($json.type || 'landing_page') + \"\\n\\nGénère en JSON:\\n- hero_headline: titre principal percutant\\n- hero_subheadline: sous-titre qui développe\\n- hero_cta: texte du bouton CTA\\n- problem_section: 3 pains points\\n- solution_section: comment vous résolvez\\n- benefits: 6 bénéfices clés (titre + description)\\n- social_proof: 3 témoignages fictifs réalistes\\n- faq: 5 questions/réponses\\n- final_cta_headline: titre section CTA finale\\n- final_cta_text: texte du CTA final\\n- email_subject_lines: 5 variantes objet email\\n- email_body: email de séquence J0\"}]"
+            },
+            { "name": "max_tokens", "value": "2500" },
+            { "name": "response_format", "value": "={\"type\":\"json_object\"}" }
+          ]
+        }
+      },
+      "id": "generate-copy",
+      "name": "GPT-4 Génère Copie",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst brief = $node['Webhook Brief Copywriting'].first().json;\n\nlet copy;\ntry {\n  copy = JSON.parse(response.choices[0].message.content);\n} catch (e) {\n  throw new Error('Erreur parsing copywriting');\n}\n\n// Construire HTML landing page complet\nconst landingHtml = `<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<title>${copy.hero_headline}</title>\n<style>\n  * { box-sizing: border-box; margin: 0; padding: 0; }\n  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #111; }\n  .hero { background: linear-gradient(135deg, #4F46E5, #7C3AED); color: white; padding: 80px 40px; text-align: center; }\n  .hero h1 { font-size: 2.5em; font-weight: 800; margin-bottom: 16px; }\n  .hero p { font-size: 1.2em; opacity: 0.9; margin-bottom: 32px; }\n  .cta-btn { background: #F59E0B; color: white; padding: 16px 40px; border-radius: 8px; font-size: 1.1em; font-weight: 700; text-decoration: none; display: inline-block; }\n  .section { padding: 60px 40px; max-width: 900px; margin: 0 auto; }\n  .benefits-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }\n  .benefit-card { background: #f9fafb; border-radius: 8px; padding: 24px; }\n  .benefit-card h3 { color: #4F46E5; margin-bottom: 8px; }\n  .testimonial { background: #f9fafb; border-left: 4px solid #4F46E5; padding: 20px; margin: 16px 0; border-radius: 0 8px 8px 0; }\n</style>\n</head>\n<body>\n<div class=\"hero\">\n  <h1>${copy.hero_headline}</h1>\n  <p>${copy.hero_subheadline}</p>\n  <a class=\"cta-btn\" href=\"#contact\">${copy.hero_cta}</a>\n</div>\n<div class=\"section\">\n  <h2>Vous reconnaissez-vous?</h2>\n  ${copy.problem_section?.map(p => `<p>✓ ${p}</p>`).join('') || ''}\n</div>\n<div class=\"section\">\n  <h2>La Solution</h2>\n  <p>${copy.solution_section}</p>\n</div>\n<div class=\"section\">\n  <h2>Vos Bénéfices</h2>\n  <div class=\"benefits-grid\">\n    ${copy.benefits?.map(b => `<div class=\"benefit-card\"><h3>${b.titre || b}</h3><p>${b.description || ''}</p></div>`).join('') || ''}\n  </div>\n</div>\n<div class=\"section\">\n  <h2>Ce que disent nos clients</h2>\n  ${copy.social_proof?.map(t => `<div class=\"testimonial\"><p>${t.temoignage || t}</p><strong>${t.auteur || ''}</strong></div>`).join('') || ''}\n</div>\n<div class=\"section\" style=\"text-align:center;background:#4F46E5;color:white;border-radius:16px;\">\n  <h2>${copy.final_cta_headline}</h2>\n  <a class=\"cta-btn\" href=\"#contact\">${copy.final_cta_text}</a>\n</div>\n</body>\n</html>`;\n\nreturn [{\n  json: {\n    ...brief,\n    copy,\n    landingHtml,\n    emailSubjectLines: copy.email_subject_lines,\n    emailBody: copy.email_body,\n    dateCreation: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "build-landing",
+      "name": "Construire Landing Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$vars.NOTION_API_KEY}}" },
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\"parent\": {\"database_id\": \"{{$vars.NOTION_DB_COPY_ID}}\"}, \"properties\": {\"Titre\": {\"title\": [{\"text\": {\"content\": \"Landing Page: {{ $json.produit }}\"}}]}, \"Type\": {\"select\": {\"name\": \"Landing Page\"}}, \"Date\": {\"date\": {\"start\": \"{{ $json.dateCreation }}\"}}, \"Statut\": {\"select\": {\"name\": \"À réviser\"}}}, \"children\": [{\"object\": \"block\", \"type\": \"heading_2\", \"heading_2\": {\"rich_text\": [{\"text\": {\"content\": \"Headlines\"}}]}}, {\"object\": \"block\", \"type\": \"paragraph\", \"paragraph\": {\"rich_text\": [{\"text\": {\"content\": \"H1: {{ $json.copy.hero_headline }}\"}}]}}]}"
+      },
+      "id": "save-notion",
+      "name": "Sauvegarder Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"produit\": \"{{ $json.produit }}\", \"headline\": \"{{ $json.copy.hero_headline }}\", \"message\": \"Copywriting généré et sauvegardé dans Notion\"}"
+      },
+      "id": "webhook-response",
+      "name": "Réponse Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1400, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Brief Copywriting": { "main": [[{ "node": "GPT-4 Génère Copie", "type": "main", "index": 0 }]] },
+    "GPT-4 Génère Copie": { "main": [[{ "node": "Construire Landing Page", "type": "main", "index": 0 }]] },
+    "Construire Landing Page": { "main": [[{ "node": "Sauvegarder Notion", "type": "main", "index": 0 }]] },
+    "Sauvegarder Notion": { "main": [[{ "node": "Réponse Webhook", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "copywriting" }, { "name": "conversion" }]
+}
