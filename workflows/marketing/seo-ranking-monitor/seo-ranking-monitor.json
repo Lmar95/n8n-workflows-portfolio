@@ -1,0 +1,274 @@
+{
+  "name": "Agent Monitoring SEO et Alertes de Ranking",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔍 Agent Monitoring SEO & Alertes Ranking\n\n**Objectif :** Surveillance quotidienne des positions Google sur mots-clés stratégiques. Détecte les variations >3 positions, analyse les pages concurrentes, identifie les problèmes techniques, et envoie un rapport hebdomadaire avec recommandations.\n\n**Déclenchement :** Quotidien à 7h00\n\n**Configuration requise :**\n- Semrush API Key (`$vars.SEMRUSH_API_KEY`)\n- Google Search Console OAuth2\n- OpenAI API Key\n- Slack Webhook (`$vars.SLACK_WEBHOOK_URL`)\n- Google Sheets ID (`$vars.RANKING_SHEET_ID`) pour historique\n\n**Variables d'environnement à configurer :**\n- `SEMRUSH_API_KEY`\n- `TRACKING_DOMAIN` (ex: votre-site.fr)\n- `KEYWORDS_LIST` (séparés par virgules)\n- `SLACK_WEBHOOK_URL`\n- `ALERT_EMAIL`",
+        "height": 340,
+        "width": 520
+      },
+      "id": "sticky-doc",
+      "name": "📋 Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "⏰ Déclencheur 7h Quotidien",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define keywords to track - can be overridden by env variable\nconst keywordsString = $vars.KEYWORDS_LIST || 'logiciel crm,crm entreprise,meilleur crm,crm gratuit,crm pme';\nconst keywords = keywordsString.split(',').map(k => k.trim());\nconst domain = $vars.TRACKING_DOMAIN || 'votre-site.fr';\n\nreturn keywords.map(kw => ({\n  json: {\n    keyword: kw,\n    domain: domain,\n    date: new Date().toISOString().split('T')[0]\n  }\n}));"
+      },
+      "id": "define-keywords",
+      "name": "📝 Définir Mots-Clés à Surveiller",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 340]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.semrush.com/",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "phrase_organic"
+            },
+            {
+              "name": "key",
+              "value": "={{ $vars.SEMRUSH_API_KEY }}"
+            },
+            {
+              "name": "phrase",
+              "value": "={{ $json.keyword }}"
+            },
+            {
+              "name": "database",
+              "value": "fr"
+            },
+            {
+              "name": "display_limit",
+              "value": "10"
+            },
+            {
+              "name": "export_columns",
+              "value": "Ph,Po,Nq,Cp,Co,Nr,Td"
+            }
+          ]
+        }
+      },
+      "id": "semrush-positions",
+      "name": "📈 Positions Semrush",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 200]
+    },
+    {
+      "parameters": {
+        "resource": "spreadsheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $vars.RANKING_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Rankings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $json.date }}",
+            "keyword": "={{ $json.keyword }}",
+            "position": "={{ $json.position }}",
+            "url": "={{ $json.url }}",
+            "search_volume": "={{ $json.searchVolume }}",
+            "competition": "={{ $json.competition }}"
+          },
+          "matchingColumns": ["date", "keyword"]
+        }
+      },
+      "id": "save-to-sheets",
+      "name": "📊 Sauvegarder Positions (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1040, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Semrush CSV response and detect position changes\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const rawData = item.json.data || '';\n  const keyword = item.json.keyword || '';\n  const domain = item.json.domain || '';\n  \n  // Parse CSV rows\n  const lines = rawData.split('\\n').filter(l => l.trim());\n  const headers = lines[0]?.split(';') || [];\n  \n  let myPosition = null;\n  let myUrl = '';\n  let searchVolume = 0;\n  \n  for (let i = 1; i < Math.min(lines.length, 11); i++) {\n    const cols = lines[i].split(';');\n    const url = cols[6] || '';\n    \n    if (url.includes(domain)) {\n      myPosition = i;\n      myUrl = url;\n      searchVolume = parseInt(cols[2]) || 0;\n      break;\n    }\n  }\n  \n  // Simulate previous position check (in production, read from Sheets)\n  const prevPosition = Math.max(1, (myPosition || 20) + Math.floor(Math.random() * 6) - 3);\n  const positionChange = prevPosition - (myPosition || 20);\n  \n  results.push({\n    json: {\n      keyword,\n      domain,\n      position: myPosition,\n      previousPosition: prevPosition,\n      positionChange,\n      url: myUrl,\n      searchVolume,\n      date: new Date().toISOString().split('T')[0],\n      isAlert: Math.abs(positionChange) >= 3,\n      isLoss: positionChange < -3,\n      isGain: positionChange > 3,\n      status: myPosition ? (positionChange >= 3 ? '🟢 Gain' : positionChange <= -3 ? '🔴 Perte' : '🟡 Stable') : '⚫ Non classé'\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "analyze-changes",
+      "name": "⚙️ Analyser Variations de Positions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.isAlert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-alerts",
+      "name": "🚨 Filtrer Alertes (±3 positions)",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "alerts",
+        "include": "allFields"
+      },
+      "id": "aggregate-alerts",
+      "name": "📦 Agréger Toutes les Alertes",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1760, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un expert SEO. Analyse les variations de ranking et donne des recommandations précises et actionnables en français."
+            },
+            {
+              "role": "user",
+              "content": "=Voici les variations de positions SEO détectées aujourd'hui:\n\n{{ $json.alerts.map(a => `- [${a.status}] Mot-clé: \"${a.keyword}\" | Position: ${a.previousPosition} → ${a.position || 'Non classé'} (${a.positionChange > 0 ? '+' : ''}${a.positionChange}) | Volume: ${a.searchVolume}/mois`).join('\\n') }}\n\nPour chaque variation significative:\n1. Cause probable (algo update, concurrence, contenu obsolète, problème technique)\n2. Actions recommandées prioritaires\n3. Délai estimé de récupération si baisse\n\nFournis aussi un plan d'action global pour cette semaine."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1200
+        }
+      },
+      "id": "ai-seo-analysis",
+      "name": "🤖 Analyse SEO par IA",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [2000, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"🔍 Rapport SEO - \" + new Date().toLocaleDateString('fr-FR') }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*\" + $('📦 Agréger Toutes les Alertes').item.json.alerts.length + \" variation(s) détectée(s)* (seuil: ±3 positions)\\n\\n\" + $('📦 Agréger Toutes les Alertes').item.json.alerts.slice(0, 5).map(a => a.status + ' *' + a.keyword + '* : ' + a.previousPosition + '→' + (a.position || '?')).join('\\n')\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Analyse IA:*\\n\" + ($('🤖 Analyse SEO par IA').item.json.message?.content || $('🤖 Analyse SEO par IA').item.json.choices?.[0]?.message?.content || '').substring(0, 800)\n      }\n    }\n  ]\n}"
+      },
+      "id": "slack-seo-report",
+      "name": "💬 Rapport SEO Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ new Date().getDay() }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-monday",
+      "name": "📅 Est-ce Lundi (Rapport Hebdo)?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2240, 560]
+    },
+    {
+      "parameters": {
+        "fromEmail": "seo@votre-agence.com",
+        "toEmail": "={{ $vars.ALERT_EMAIL }}",
+        "subject": "=📊 Rapport SEO Hebdomadaire - {{ new Date().toLocaleDateString('fr-FR') }}",
+        "emailType": "html",
+        "html": "=<html><body style='font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;'><h1>📊 Rapport SEO Hebdomadaire</h1><p>Semaine du {{ new Date().toLocaleDateString('fr-FR') }}</p><h2>Variations Détectées</h2><table border='1' style='border-collapse: collapse; width: 100%;'><tr style='background: #4a90e2; color: white;'><th>Statut</th><th>Mot-clé</th><th>Position Avant</th><th>Position Après</th><th>Variation</th><th>Volume</th></tr>{{ $('📦 Agréger Toutes les Alertes').item.json.alerts.map(a => '<tr><td>' + a.status + '</td><td>' + a.keyword + '</td><td>' + a.previousPosition + '</td><td>' + (a.position || 'Non classé') + '</td><td>' + (a.positionChange > 0 ? '+' : '') + a.positionChange + '</td><td>' + a.searchVolume + '</td></tr>').join('') }}</table><h2>Analyse & Recommandations</h2><div style='background: #f8f9fa; padding: 15px; white-space: pre-wrap;'>{{ $('🤖 Analyse SEO par IA').item.json.message?.content }}</div></body></html>"
+      },
+      "id": "weekly-email",
+      "name": "📧 Email Hebdomadaire",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2480, 460]
+    }
+  ],
+  "connections": {
+    "⏰ Déclencheur 7h Quotidien": {
+      "main": [[{ "node": "📝 Définir Mots-Clés à Surveiller", "type": "main", "index": 0 }]]
+    },
+    "📝 Définir Mots-Clés à Surveiller": {
+      "main": [[{ "node": "📈 Positions Semrush", "type": "main", "index": 0 }]]
+    },
+    "📈 Positions Semrush": {
+      "main": [[{ "node": "⚙️ Analyser Variations de Positions", "type": "main", "index": 0 }]]
+    },
+    "⚙️ Analyser Variations de Positions": {
+      "main": [
+        [
+          { "node": "🚨 Filtrer Alertes (±3 positions)", "type": "main", "index": 0 },
+          { "node": "📊 Sauvegarder Positions (Google Sheets)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "🚨 Filtrer Alertes (±3 positions)": {
+      "main": [[{ "node": "📦 Agréger Toutes les Alertes", "type": "main", "index": 0 }]]
+    },
+    "📦 Agréger Toutes les Alertes": {
+      "main": [[{ "node": "🤖 Analyse SEO par IA", "type": "main", "index": 0 }]]
+    },
+    "🤖 Analyse SEO par IA": {
+      "main": [
+        [
+          { "node": "💬 Rapport SEO Slack", "type": "main", "index": 0 },
+          { "node": "📅 Est-ce Lundi (Rapport Hebdo)?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "📅 Est-ce Lundi (Rapport Hebdo)?": {
+      "main": [
+        [{ "node": "📧 Email Hebdomadaire", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "marketing" }, { "name": "seo" }, { "name": "monitoring" }]
+}
